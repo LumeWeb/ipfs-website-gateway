@@ -1,0 +1,61 @@
+# IPFS Website Gateway Configuration Example
+# Copy this file to gateway.yaml and customize as needed
+
+# Server configuration
+server:
+  # HTTP server port (default: 8080)
+  port: 8080
+  
+  # Trusted proxy IPs for X-Forwarded-For header (default: none)
+  # Useful when running behind a reverse proxy like Caddy or Nginx
+  trusted_proxies:
+    - 127.0.0.1
+    - 10.0.0.0/8
+    - 172.16.0.0/12
+    - 192.168.0.0/16
+
+# Internal API configuration
+api:
+  # URL of the internal API for website validation
+  # This is required for the gateway to function
+  url: https://api.example.com
+  
+  # Secret key for authenticating with the internal API
+  # This is required for the gateway to function
+  secret: your-secret-key-here
+  
+  # Timeout for API requests (default: 30s)
+  timeout: 30s
+
+# IPFS configuration
+ipfs:
+  # Seed peer to connect to for initial bootstrap (default: ipfs.pinner.xyz)
+  # Leave empty to start without bootstrap connections
+  seed_peer: ipfs.pinner.xyz
+  
+  # Path to IPFS repository for storing blocks and data (default: ./data/ipfs)
+  # This directory will be created if it doesn't exist
+  repo_path: ./data/ipfs
+
+# Cache configuration
+cache:
+  # TTL for status cache (default: 5m)
+  # Controls how long website status responses are cached in memory
+  status_cache_ttl: 5m
+  
+  # LRU size for status cache (default: 1000)
+  # Maximum number of website statuses to keep in memory
+  status_cache_lru_size: 1000
+  
+  # Path to content cache directory (default: /tmp/ipfs-cache)
+  # This directory will be created if it doesn't exist
+  content_cache_path: ./data/cache
+  
+  # Maximum size of content cache in bytes (default: 10737418240)
+  # Set to 0 to disable content caching
+  content_cache_max_bytes: 10737418240  # 10GB
+
+# Logging configuration
+logging:
+  # Log level: debug, info, warn, error (default: info)
+  level: info
