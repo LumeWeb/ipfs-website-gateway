@@ -1,0 +1,50 @@
+# Vendor directory - use module cache in Docker build
+vendor/
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs
+*.md
+!README.md
+AGENTS.md
+GOLANG_COMMENTS.md
+MOCKERY_USAGE.md
+
+# Test
+*_test.go
+.vendor/
+vendor/
+
+# Build artifacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+gateway
+
+# Config files (use env vars in Docker)
+gateway.yaml
+*.yaml
+!swagger.yaml
+
+# Data directories
+data/
+tmp/
