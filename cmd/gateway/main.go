@@ -49,6 +49,9 @@ func main() {
 	}
 
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		logger, _ := zap.NewDevelopment()
+		logger.Error("gateway failed to start", zap.Error(err))
+		logger.Sync()
 		os.Exit(1)
 	}
 }
