@@ -28,6 +28,10 @@ RUN apk --no-cache add ca-certificates tzdata
 RUN addgroup -g 1000 gateway && \
     adduser -D -u 1000 -G gateway gateway
 
+# Create config directory and set ownership
+RUN mkdir -p /etc/lumeweb/gateway && \
+    chown -R gateway:gateway /etc/lumeweb
+
 WORKDIR /app
 
 # Copy binary from builder
