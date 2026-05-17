@@ -187,8 +187,10 @@ func (n *Node) connectToSeedPeer(ctx context.Context, seedPeer string) error {
 		if err != nil {
 			return fmt.Errorf("failed to resolve dnsaddr: %w", err)
 		}
-		infos, _ := peer.AddrInfosFromP2pAddrs(resolved...)
-		if len(infos) == 0 {
+		// AddrInfosFromP2pAddrs is all-or-nothing: returns (nil, ErrInvalidAddr)
+		// if any addr lacks /p2p/, or (ais, nil) with all grouped by peer ID.
+		infos, err := peer.AddrInfosFromP2pAddrs(resolved...)
+		if err != nil || len(infos) == 0 {
 			return fmt.Errorf("no resolved addresses with peer ID found for %s", addr)
 		}
 		peerInfo = &infos[0]
