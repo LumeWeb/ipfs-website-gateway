@@ -8,6 +8,9 @@
 # Go workspace
 go.work
 
+# Vendor
+vendor/
+
 # IDE
 .idea/
 .vscode/

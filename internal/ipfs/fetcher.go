@@ -137,7 +137,7 @@ func (f *Fetcher) FetchUnixFileWithRange(ctx context.Context, c cid.Cid, path []
 	// Validate and normalize the range against the file size
 	normalizedRange, err := parsedRange.Validate(fileSize)
 	if err != nil {
-		dr.Close()
+		_ = dr.Close()
 		return nil, "", nil, fmt.Errorf("invalid range: %w", err)
 	}
 
@@ -146,7 +146,7 @@ func (f *Fetcher) FetchUnixFileWithRange(ctx context.Context, c cid.Cid, path []
 	if normalizedRange != nil {
 		_, err = dr.Seek(normalizedRange.Start, io.SeekStart)
 		if err != nil {
-			dr.Close()
+			_ = dr.Close()
 			return nil, "", nil, fmt.Errorf("failed to seek to range start: %w", err)
 		}
 		// Wrap the reader to limit reads to the range length

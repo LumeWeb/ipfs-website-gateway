@@ -42,29 +42,6 @@ func (m *mockAPIClient) GetWebsite(ctx context.Context, domain string) (*types.G
 	return nil, errors.New("not implemented")
 }
 
-// Mock status cache
-type mockStatusCache struct {
-	getFunc func(domain string) *types.CacheResult
-	setFunc func(domain string, response *types.GatewayWebsiteResponse)
-}
-
-func (m *mockStatusCache) Get(domain string) *types.CacheResult {
-	if m.getFunc != nil {
-		return m.getFunc(domain)
-	}
-	return &types.CacheResult{Hit: false}
-}
-
-func (m *mockStatusCache) Set(domain string, response *types.GatewayWebsiteResponse) {
-	if m.setFunc != nil {
-		m.setFunc(domain, response)
-	}
-}
-
-func (m *mockStatusCache) SetInvalid(domain string) {
-	m.Set(domain, nil)
-}
-
 // Mock IPFS fetcher
 type mockIPFSFetcher struct {
 	fetchFunc func(ctx context.Context, c cid.Cid, path []string) (io.ReadSeekCloser, string, error)

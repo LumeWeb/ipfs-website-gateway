@@ -25,8 +25,7 @@ func TestNewNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
-
+	defer func() { _ = node.Close() }()
 	// Verify node components
 	if node.Host == nil {
 		t.Error("Host should not be nil")
@@ -62,8 +61,7 @@ func TestNewNodeWithSeedPeer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode with seed peer failed: %v", err)
 	}
-	defer node.Close()
-
+	defer func() { _ = node.Close() }()
 	// Verify node was created successfully
 	if node.Host == nil {
 		t.Error("Host should not be nil")
@@ -157,8 +155,7 @@ func TestNodePeerID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
-
+	defer func() { _ = node.Close() }()
 	pid := node.PeerID()
 	if pid == "" {
 		t.Error("PeerID should not be empty")
@@ -183,8 +180,7 @@ func TestNodeAddrs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
-
+	defer func() { _ = node.Close() }()
 	addrs := node.Addrs()
 	if len(addrs) == 0 {
 		t.Error("Node should have at least one listen address")
@@ -223,7 +219,7 @@ func TestNodePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Second NewNode failed: %v", err)
 	}
-	defer node2.Close()
+	defer func() { _ = node2.Close() }()
 
 	// Note: Peer IDs will be different because we generate new keys each time
 	// This is expected behavior for this minimal implementation
@@ -246,7 +242,7 @@ func BenchmarkNewNode(b *testing.B) {
 		if err != nil {
 			b.Fatalf("NewNode failed: %v", err)
 		}
-		node.Close()
+		_ = node.Close()
 	}
 }
 
@@ -264,8 +260,7 @@ func TestConnectedPeers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewNode failed: %v", err)
 		}
-		defer node.Close()
-
+		defer func() { _ = node.Close() }()
 		peers := node.ConnectedPeers()
 		if len(peers) != 0 {
 			t.Errorf("Expected no connected peers, got %d", len(peers))
@@ -284,8 +279,7 @@ func TestConnectedPeers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewNode with seed peer failed: %v", err)
 		}
-		defer node.Close()
-
+		defer func() { _ = node.Close() }()
 		// Give some time for connection to establish
 		time.Sleep(2 * time.Second)
 

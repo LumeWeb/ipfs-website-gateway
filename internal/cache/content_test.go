@@ -500,7 +500,7 @@ func TestContentCache_ClearWithDirectoryHashing(t *testing.T) {
 
 		// Verify all files are removed (directories may remain)
 		var fileCount int
-		filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
+		_ = filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
 			}

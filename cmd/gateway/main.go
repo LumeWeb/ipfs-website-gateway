@@ -51,7 +51,7 @@ func main() {
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
 		logger, _ := zap.NewDevelopment()
 		logger.Error("gateway failed to start", zap.Error(err))
-		logger.Sync()
+		_ = logger.Sync()
 		os.Exit(1)
 	}
 }
@@ -87,7 +87,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
-	defer logger.Sync()
+	defer func() { _ = logger.Sync() }()
 	
 	// Set the real logger on config manager
 	cfgMgr.SetLogger(logger)
@@ -103,15 +103,19 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		logger.Error("failed to initialize IPFS node", zap.Error(err))
 		return fmt.Errorf("failed to initialize IPFS node: %w", err)
 	}
-	defer node.Close()
+	defer func() { _ = node.Close() }()
 
 	logger.Info("IPFS node initialized",
 		zap.String("peer_id", node.Host.ID().String()),
 		zap.Int("addrs", len(node.Host.Addrs())),
 	)
 
-	// 4. Initialize API client (using swagger-based client)
-	apiClient := api.NewSwaggerClient(cfg.API.URL, cfg.API.Secret, cfg.API.Timeout)
+	// 4. Initialize API client (using ipfs-sdk)
+	apiClient, err := api.NewClient(cfg.API.URL, cfg.API.Secret, int(cfg.API.Timeout.Seconds()))
+	if err != nil {
+		logger.Error("failed to initialize API client", zap.Error(err))
+		return fmt.Errorf("failed to initialize API client: %w", err)
+	}
 	logger.Info("API client initialized", zap.String("url", cfg.API.URL))
 
 	// 5. Initialize caches
