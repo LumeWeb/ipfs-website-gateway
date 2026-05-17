@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	dnslinkstd "github.com/dnslink-std/go"
@@ -31,12 +32,13 @@ func ValidateDNSLink(ctx context.Context, domain string) (string, error) {
 		defer cancel()
 	}
 
-	dnslinkName := "_dnslink." + domain
-
 	resolver := &dnslinkstd.Resolver{
 		LookupTXT: func(name string) ([]dnslinkstd.LookupEntry, error) {
 			txt, err := net.DefaultResolver.LookupTXT(ctx, name)
 			if err != nil {
+				if strings.Contains(err.Error(), "no such host") {
+					err = dnslinkstd.NewDNSRCodeError(3, name)
+				}
 				return nil, err
 			}
 			entries := make([]dnslinkstd.LookupEntry, len(txt))
@@ -47,7 +49,7 @@ func ValidateDNSLink(ctx context.Context, domain string) (string, error) {
 		},
 	}
 
-	result, err := resolver.Resolve(dnslinkName)
+	result, err := resolver.Resolve(domain)
 	if err != nil {
 		return "", fmt.Errorf("DNS query failed: %w", err)
 	}
