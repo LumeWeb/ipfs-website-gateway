@@ -3,6 +3,7 @@ package health
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/alexliesenfeld/health"
@@ -47,27 +48,14 @@ func NewChecker(apiClient APIClient, ipfsNode IPFSNode) health.Checker {
 // checkAPIHealth verifies that the internal API is reachable and responding.
 // It attempts to query a known endpoint (using a test domain) to verify connectivity.
 func checkAPIHealth(ctx context.Context, client APIClient) error {
-	// Use a minimal request to check API connectivity
-	// We query a health check domain that should exist in the API
-	// The actual response content doesn't matter, just that we get a response
 	_, err := client.GetWebsite(ctx, "health-check.example.com")
-	
-	// If we get a 404, the API is up but the domain doesn't exist - that's OK for health check
-	// We only fail on connection errors or other unexpected errors
 	if err != nil {
 		errStr := err.Error()
-		// Consider 404 as healthy (API is responding)
-		if errStr == "website not found: health-check.example.com" {
+		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "gone") || strings.Contains(errStr, "status 404") || strings.Contains(errStr, "status 410") {
 			return nil
 		}
-		// Consider 410 as healthy (API is responding)
-		if errStr == "website is broken or gone: health-check.example.com" {
-			return nil
-		}
-		// Any other error indicates a problem
 		return fmt.Errorf("internal API health check failed: %w", err)
 	}
-	
 	return nil
 }
 

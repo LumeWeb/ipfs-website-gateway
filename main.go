@@ -1,6 +1,3 @@
-// Temporary file to ensure go.mod retains all required dependencies
-// before actual implementation begins.
-
 package main
 
 import (
@@ -11,6 +8,7 @@ import (
 	_ "github.com/labstack/echo/v4"
 	_ "github.com/miekg/dns"
 	_ "github.com/urfave/cli/v3"
+	_ "go.lumeweb.com/ipfs-sdk"
 	_ "go.uber.org/zap"
 )
 

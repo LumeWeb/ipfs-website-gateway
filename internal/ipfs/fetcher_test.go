@@ -31,7 +31,7 @@ func TestNewFetcher(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
+	defer func() { _ = node.Close() }()
 
 	fetcher := NewFetcher(node, logger)
 
@@ -58,25 +58,22 @@ func TestFetchUnixFileSimpleFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
+	defer func() { _ = node.Close() }()
 
 	fetcher := NewFetcher(node, logger)
 
-	// Create a simple file content
 	content := "Hello, IPFS!"
 	c, err := addFileToNode(ctx, node, strings.NewReader(content))
 	if err != nil {
 		t.Fatalf("Failed to add file to node: %v", err)
 	}
 
-	// Fetch the file
 	rsc, filename, err := fetcher.FetchUnixFile(ctx, c, nil)
 	if err != nil {
 		t.Fatalf("FetchUnixFile failed: %v", err)
 	}
-	defer rsc.Close()
+	defer func() { _ = rsc.Close() }()
 
-	// Verify content
 	data, err := io.ReadAll(rsc)
 	if err != nil {
 		t.Fatalf("Failed to read content: %v", err)
@@ -85,29 +82,18 @@ func TestFetchUnixFileSimpleFile(t *testing.T) {
 		t.Errorf("Content mismatch: got %q, want %q", string(data), content)
 	}
 
-	// Verify filename (should be empty for root)
 	if filename != "" {
 		t.Errorf("Expected empty filename for root, got %q", filename)
 	}
 }
 
 // TestFetchUnixFileWithPath tests fetching a file with a path.
-// Note: This test is simplified to avoid complex directory creation.
 func TestFetchUnixFileWithPath(t *testing.T) {
-	// This test is skipped because creating UnixFS directories in tests
-	// requires more complex setup. The basic file fetching is tested
-	// in TestFetchUnixFileSimpleFile.
 	t.Skip("Skipping directory test - requires complex UnixFS directory setup")
 }
 
 // TestFetchUnixFileDirectoryWithIndex tests fetching a directory with index.html.
-// Note: This test is skipped because creating UnixFS directories in tests
-// requires more complex setup. The basic file fetching is tested
-// in TestFetchUnixFileSimpleFile.
 func TestFetchUnixFileDirectoryWithIndex(t *testing.T) {
-	// This test is skipped because creating UnixFS directories in tests
-	// requires more complex setup. The basic file fetching is tested
-	// in TestFetchUnixFileSimpleFile.
 	t.Skip("Skipping directory test - requires complex UnixFS directory setup")
 }
 
@@ -123,18 +109,16 @@ func TestFetchUnixFileInvalidPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
+	defer func() { _ = node.Close() }()
 
 	fetcher := NewFetcher(node, logger)
 
-	// Create a simple file
 	content := "test content"
 	c, err := addFileToNode(ctx, node, strings.NewReader(content))
 	if err != nil {
 		t.Fatalf("Failed to add file to node: %v", err)
 	}
 
-	// Try to fetch with an invalid path
 	_, _, err = fetcher.FetchUnixFile(ctx, c, []string{"nonexistent", "file.txt"})
 	if err == nil {
 		t.Error("Expected error for invalid path")
@@ -143,7 +127,6 @@ func TestFetchUnixFileInvalidPath(t *testing.T) {
 
 // TestFetchUnixFileInvalidCID tests fetching with an invalid CID.
 func TestFetchUnixFileInvalidCID(t *testing.T) {
-	// Use a context with timeout to prevent hanging on network fetch
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -156,19 +139,16 @@ func TestFetchUnixFileInvalidCID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
+	defer func() { _ = node.Close() }()
 
 	fetcher := NewFetcher(node, logger)
 
-	// Create a CID that doesn't exist locally (will timeout on network fetch)
 	invalidCid := cid.MustParse("QmUNLLsPACCz1vLxQVkXqqLX5R1X345qqfHbsf67hvA3Nn")
 
 	_, _, err = fetcher.FetchUnixFile(ctx, invalidCid, nil)
 	if err == nil {
 		t.Error("Expected error for CID that doesn't exist")
 	}
-	// We expect either a timeout error or a "not found" error
-	// Both are acceptable outcomes for this test
 }
 
 // TestFetchUnixFileSeek tests that the returned reader supports seeking.
@@ -183,7 +163,7 @@ func TestFetchUnixFileSeek(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
+	defer func() { _ = node.Close() }()
 
 	fetcher := NewFetcher(node, logger)
 
@@ -199,7 +179,7 @@ func TestFetchUnixFileSeek(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchUnixFile failed: %v", err)
 	}
-	defer rsc.Close()
+	defer func() { _ = rsc.Close() }()
 
 	// Test seeking
 	offset, err := rsc.Seek(50, io.SeekStart)
@@ -279,7 +259,7 @@ func TestFetchUnixFileWithRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
+	defer func() { _ = node.Close() }()
 
 	fetcher := NewFetcher(node, logger)
 
@@ -370,7 +350,7 @@ func TestFetchUnixFileWithRange(t *testing.T) {
 			if err != nil {
 				t.Fatalf("FetchUnixFileWithRange failed: %v", err)
 			}
-			defer rsc.Close()
+				defer func() { _ = rsc.Close() }()
 
 			// Verify range metadata
 			if tt.noRangeInfo {
@@ -421,8 +401,8 @@ func BenchmarkFetchUnixFile(b *testing.B) {
 	if err != nil {
 		b.Fatalf("NewNode failed: %v", err)
 	}
-	defer node.Close()
-
+	defer func() { _ = node.Close() }()
+	
 	fetcher := NewFetcher(node, logger)
 
 	content := strings.Repeat("benchmark content ", 100)
@@ -437,7 +417,7 @@ func BenchmarkFetchUnixFile(b *testing.B) {
 		if err != nil {
 			b.Fatalf("FetchUnixFile failed: %v", err)
 		}
-		io.Copy(io.Discard, rsc)
-		rsc.Close()
+		_, _ = io.Copy(io.Discard, rsc)
+		_ = rsc.Close()
 	}
 }

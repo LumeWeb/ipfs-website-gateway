@@ -5,10 +5,10 @@ import (
 	"time"
 )
 
-func TestWebsiteStatusConstants(t *testing.T) {
+func TestStatusConstants(t *testing.T) {
 	tests := []struct {
 		name   string
-		status WebsiteStatus
+		status string
 		value  string
 	}{
 		{"PendingValidation", StatusPendingValidation, "pending_validation"},
@@ -18,8 +18,8 @@ func TestWebsiteStatusConstants(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if string(tt.status) != tt.value {
-				t.Errorf("WebsiteStatus = %v, want %v", tt.status, tt.value)
+			if tt.status != tt.value {
+				t.Errorf("status = %v, want %v", tt.status, tt.value)
 			}
 		})
 	}

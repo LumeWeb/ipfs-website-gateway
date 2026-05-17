@@ -72,7 +72,7 @@ func (s *Server) HandleGatewayRequest(c echo.Context) error {
 
 	// Step 5: Check result status
 	if website.Status != types.StatusActive {
-		s.logger.Debug("website not active", zap.String("domain", domain), zap.String("status", string(website.Status)))
+		s.logger.Debug("website not active", zap.String("domain", domain), zap.String("status", website.Status))
 		s.statusCache.SetInvalid(domain)
 		return s.errorResponse(c, http.StatusGone, "domain unavailable")
 	}
@@ -111,7 +111,7 @@ func (s *Server) serveWebsite(c echo.Context, website *types.GatewayWebsiteRespo
 			zap.Error(err))
 		return s.errorResponse(c, http.StatusBadGateway, "failed to fetch content")
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	// Determine content type
 	contentType := getContentType(filename)
@@ -124,7 +124,7 @@ func (s *Server) serveWebsite(c echo.Context, website *types.GatewayWebsiteRespo
 	if seeker, ok := reader.(io.Seeker); ok {
 		currentPos, _ := seeker.Seek(0, io.SeekCurrent)
 		endPos, _ := seeker.Seek(0, io.SeekEnd)
-		seeker.Seek(currentPos, io.SeekStart)
+		_, _ = seeker.Seek(currentPos, io.SeekStart)
 		contentLength = endPos - currentPos
 	}
 
