@@ -42,7 +42,7 @@ func ValidateDNSLink(ctx context.Context, domain string) (string, error) {
 	// Apply default timeout if not already set in context
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
 		var cancel context.CancelFunc
-		_, cancel = context.WithTimeout(ctx, defaultDNSTimeout)
+		ctx, cancel = context.WithTimeout(ctx, defaultDNSTimeout) //nolint:staticcheck // SA4006: ctx must be reassigned to apply deadline
 		defer cancel()
 	}
 
