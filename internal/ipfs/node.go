@@ -15,6 +15,7 @@ import (
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 )
@@ -176,13 +177,30 @@ func (n *Node) connectToSeedPeer(ctx context.Context, seedPeer string) error {
 		return fmt.Errorf("failed to parse seed peer address: %w", err)
 	}
 
-	// Extract peer info from multiaddr
-	peerInfo, err := peer.AddrInfoFromP2pAddr(ma)
-	if err != nil {
-		return fmt.Errorf("failed to extract peer info from address: %w", err)
+	var peerInfo *peer.AddrInfo
+
+	if madns.Matches(ma) {
+		resolved, err := madns.Resolve(ctx, ma)
+		if err != nil {
+			return fmt.Errorf("failed to resolve dnsaddr: %w", err)
+		}
+		for _, resolvedMA := range resolved {
+			info, err := peer.AddrInfoFromP2pAddr(resolvedMA)
+			if err == nil {
+				peerInfo = info
+				break
+			}
+		}
+		if peerInfo == nil {
+			return fmt.Errorf("no resolved addresses with peer ID found for %s", addr)
+		}
+	} else {
+		peerInfo, err = peer.AddrInfoFromP2pAddr(ma)
+		if err != nil {
+			return fmt.Errorf("failed to extract peer info from address: %w", err)
+		}
 	}
 
-	// Attempt to connect with a timeout
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
