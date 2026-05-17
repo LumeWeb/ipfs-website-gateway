@@ -6,17 +6,19 @@ import (
 
 // Config represents the complete application configuration.
 type Config struct {
-	Server  ServerConfig  `config:"server"`
-	API     APIConfig     `config:"api"`
-	IPFS    IPFSConfig    `config:"ipfs"`
-	Cache   CacheConfig   `config:"cache"`
-	Logging LoggingConfig `config:"logging"`
+	Server    ServerConfig    `config:"server"`
+	API       APIConfig       `config:"api"`
+	IPFS      IPFSConfig      `config:"ipfs"`
+	Cache     CacheConfig     `config:"cache"`
+	Logging   LoggingConfig   `config:"logging"`
+	RateLimit RateLimitConfig `config:"rate_limit"`
 }
 
 // ServerConfig holds HTTP server configuration settings.
 type ServerConfig struct {
-	Port           int      `config:"port"`
+	Port          int      `config:"port"`
 	TrustedProxies []string `config:"trusted_proxies"`
+	AllowedSecret string   `config:"allowed_secret"`
 }
 
 // APIConfig holds external API configuration settings.
@@ -44,6 +46,14 @@ type CacheConfig struct {
 // LoggingConfig holds logging configuration settings.
 type LoggingConfig struct {
 	Level string `config:"level"` // debug, info, warn, error
+}
+
+// RateLimitConfig holds rate limiting configuration for the /allowed endpoint.
+type RateLimitConfig struct {
+	Enabled   bool          `config:"enabled"`
+	Rate      float64       `config:"rate"`       // requests per second
+	Burst     int           `config:"burst"`      // max concurrent requests
+	ExpiresIn time.Duration `config:"expires_in"` // cleanup interval
 }
 
 // Defaults implements the Defaults interface for providing default configuration values.
@@ -83,6 +93,16 @@ func (c CacheConfig) Defaults() map[string]any {
 func (c LoggingConfig) Defaults() map[string]any {
 	return map[string]any{
 		"Level": "info",
+	}
+}
+
+// Defaults implements the Defaults interface for providing default configuration values.
+func (c RateLimitConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Enabled":   false,
+		"Rate":      0.167,
+		"Burst":     10,
+		"ExpiresIn": 5 * time.Minute,
 	}
 }
 

@@ -6,6 +6,10 @@ server:
   # HTTP server port (default: 8080)
   port: 8080
   
+  # Secret for authenticating Caddy On-Demand TLS /allowed requests (default: none)
+  # When set, Caddy must include ?secret=<value> in its ask endpoint requests
+  # allowed_secret: your-allowed-secret-here
+  
   # Trusted proxy IPs for X-Forwarded-For header (default: none)
   # Useful when running behind a reverse proxy like Caddy or Nginx
   trusted_proxies:
@@ -59,3 +63,17 @@ cache:
 logging:
   # Log level: debug, info, warn, error (default: info)
   level: info
+
+# Rate limiting configuration for the /allowed endpoint (Caddy On-Demand TLS)
+rate_limit:
+  # Enable rate limiting on the /allowed endpoint (default: false)
+  enabled: false
+  
+  # Requests per second (default: 0.167, ~10 requests per minute)
+  rate: 0.167
+  
+  # Max burst of concurrent requests (default: 10)
+  burst: 10
+  
+  # Cleanup interval for stale rate limit entries (default: 5m)
+  expires_in: 5m

@@ -2,13 +2,16 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/alexliesenfeld/health"
 	"github.com/ipfs/go-cid"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"golang.org/x/time/rate"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
@@ -55,23 +58,65 @@ func NewServer(cfg *config.Config, logger *zap.Logger) *Server {
 		return echo.ExtractIPFromXFFHeader(trustOptions...)(r)
 	}
 
-	e.Use(middleware.Recover())
-	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Format: `${method} ${uri} ${status} ${remote_ip}` + "\n",
-	}))
-
 	srv := &Server{
 		echo:   e,
 		config: cfg,
 		logger: logger,
 	}
-	srv.setupRoutes(e)
+
+	srv.setupMiddleware(e)
 	return srv
+}
+
+// setupMiddleware initializes global middleware for the server.
+func (s *Server) setupMiddleware(e *echo.Echo) {
+	e.Use(middleware.Recover())
+	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+		Format: `${method} ${uri} ${status} ${remote_ip}` + "\n",
+	}))
+}
+
+// InitializeRoutes initializes HTTP routes for the server.
+// This method should be called after all dependencies are set.
+func (s *Server) InitializeRoutes() {
+	s.setupRoutes(s.echo)
 }
 
 // setupRoutes initializes HTTP routes for the server.
 func (s *Server) setupRoutes(e *echo.Echo) {
 	e.GET("/healthz", s.healthCheckHandler)
+
+	if s.config.RateLimit.Enabled {
+		store := middleware.NewRateLimiterMemoryStoreWithConfig(
+			middleware.RateLimiterMemoryStoreConfig{
+				Rate:      rate.Limit(s.config.RateLimit.Rate),
+				Burst:     s.config.RateLimit.Burst,
+				ExpiresIn: s.config.RateLimit.ExpiresIn,
+			},
+		)
+
+		denyHandler := func(c echo.Context, identifier string, err error) error {
+			c.Response().Header().Set("X-RateLimit-Limit", fmt.Sprintf("%.2f", s.config.RateLimit.Rate))
+			c.Response().Header().Set("X-RateLimit-Burst", fmt.Sprintf("%d", s.config.RateLimit.Burst))
+
+			s.logger.Warn("rate limit exceeded",
+				zap.String("ip", identifier),
+			)
+
+			return c.JSON(http.StatusTooManyRequests, map[string]string{
+				"error": "rate limit exceeded",
+			})
+		}
+
+		rateLimitMiddleware := middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
+			Store:       store,
+			DenyHandler: denyHandler,
+		})
+
+		e.GET("/allowed", rateLimitMiddleware(s.authMiddleware(s.allowedHandler)))
+	} else {
+		e.GET("/allowed", s.authMiddleware(s.allowedHandler))
+	}
 
 	e.GET("/ipfs/:cid", func(c echo.Context) error {
 		return c.String(http.StatusNotImplemented, "IPFS gateway handler not yet implemented")
@@ -80,6 +125,129 @@ func (s *Server) setupRoutes(e *echo.Echo) {
 	e.GET("/ipfs/:cid/*", func(c echo.Context) error {
 		return c.String(http.StatusNotImplemented, "IPFS gateway handler not yet implemented")
 	})
+}
+
+// allowedHandler handles Caddy On-Demand TLS requests to validate domains.
+// This endpoint is called by Caddy before issuing SSL certificates.
+//
+// It validates the domain parameter from the query string and returns:
+//   - 200 OK: if the domain is valid and authorized
+//   - 400 Bad Request: for all failures (auth, domain validation, DNSLink, API)
+//
+// SECURITY: Always returns 400 on failure to prevent information leakage.
+func (s *Server) allowedHandler(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	domain := c.QueryParam("domain")
+
+	s.logger.Debug("Caddy On-Demand TLS request",
+		zap.String("domain", domain),
+		zap.String("client_ip", c.RealIP()),
+	)
+
+	if domain == "" {
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	if !isValidDomain(domain) {
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	if s.dns != nil {
+		dnsLinkPath, err := s.dns.ValidateDNSLink(ctx, domain)
+		if err != nil {
+			s.logger.Debug("DNSLink validation failed",
+				zap.String("domain", domain),
+				zap.Error(err),
+			)
+			return c.NoContent(http.StatusBadRequest)
+		}
+
+		if dnsLinkPath == "" {
+			s.logger.Debug("DNSLink resolved but path is invalid",
+				zap.String("domain", domain),
+			)
+			return c.NoContent(http.StatusBadRequest)
+		}
+
+		s.logger.Debug("DNSLink validation successful",
+			zap.String("domain", domain),
+			zap.String("dnslink_path", dnsLinkPath),
+		)
+	} else {
+		s.logger.Warn("DNS validator not configured, skipping DNSLink validation")
+	}
+
+	if s.api != nil {
+		website, err := s.api.GetWebsite(ctx, domain)
+		if err != nil {
+			s.logger.Debug("Website status check failed",
+				zap.String("domain", domain),
+				zap.Error(err),
+			)
+			return c.NoContent(http.StatusBadRequest)
+		}
+
+		if website.Status != types.StatusActive {
+			s.logger.Debug("Website is not active",
+				zap.String("domain", domain),
+				zap.String("status", string(website.Status)),
+			)
+			return c.NoContent(http.StatusBadRequest)
+		}
+
+		s.logger.Debug("Website status check successful",
+			zap.String("domain", domain),
+			zap.String("status", string(website.Status)),
+		)
+	} else {
+		s.logger.Warn("API client not configured, skipping website status check")
+	}
+
+	s.logger.Info("Domain allowed for certificate issuance",
+		zap.String("domain", domain),
+	)
+	return c.NoContent(http.StatusOK)
+}
+
+// isValidDomain performs basic hostname validation according to RFC 1035.
+func isValidDomain(domain string) bool {
+	if domain == "" {
+		return false
+	}
+
+	domain = strings.ToLower(domain)
+
+	if len(domain) > 253 {
+		return false
+	}
+
+	if strings.Contains(domain, "..") {
+		return false
+	}
+
+	if strings.HasPrefix(domain, ".") || strings.HasSuffix(domain, ".") {
+		return false
+	}
+
+	labels := strings.Split(domain, ".")
+	for _, label := range labels {
+		if len(label) == 0 || len(label) > 63 {
+			return false
+		}
+
+		if strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return false
+		}
+
+		for _, r := range label {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 // healthCheckHandler handles health check requests.
