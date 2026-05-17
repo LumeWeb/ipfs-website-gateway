@@ -139,6 +139,18 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	srv.SetStatusCache(statusCache)
 	srv.SetIPFSFetcher(ipfs.NewFetcher(node, logger))
 
+	// Log rate limiting configuration if enabled
+	if cfg.RateLimit.Enabled {
+		logger.Info("Rate limiting enabled",
+			zap.Float64("rate", cfg.RateLimit.Rate),
+			zap.Int("burst", cfg.RateLimit.Burst),
+			zap.Duration("expires_in", cfg.RateLimit.ExpiresIn),
+		)
+	}
+
+	// Initialize routes after all dependencies are set
+	srv.InitializeRoutes()
+
 	// 7. Setup health checker
 	healthChecker := health.NewChecker(apiClient, node)
 	srv.SetHealthChecker(healthChecker)

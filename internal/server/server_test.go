@@ -23,6 +23,7 @@ func TestNewServer(t *testing.T) {
 	}
 
 	server := NewServer(cfg, logger)
+	server.InitializeRoutes()
 
 	if server == nil {
 		t.Fatal("NewServer returned nil")
@@ -48,6 +49,7 @@ func TestServerRoutes(t *testing.T) {
 	}
 
 	server := NewServer(cfg, logger)
+	server.InitializeRoutes()
 
 	tests := []struct {
 		name           string
@@ -105,6 +107,7 @@ func TestServerMiddleware(t *testing.T) {
 	}
 
 	server := NewServer(cfg, logger)
+	server.InitializeRoutes()
 
 	t.Run("recover middleware handles panic", func(t *testing.T) {
 		server.echo.GET("/panic", func(c echo.Context) error {
@@ -129,6 +132,7 @@ func TestServerMiddleware(t *testing.T) {
 			},
 		}
 		serverWithProxies := NewServer(cfgWithProxies, logger)
+		serverWithProxies.InitializeRoutes()
 
 		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
 			// Check if IP extractor set the real IP
@@ -162,6 +166,7 @@ func TestServerMiddleware(t *testing.T) {
 			},
 		}
 		serverWithProxies := NewServer(cfgWithProxies, logger)
+		serverWithProxies.InitializeRoutes()
 
 		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
 			// Check if IP extractor set the real IP
@@ -199,6 +204,7 @@ func TestServerMiddleware(t *testing.T) {
 			},
 		}
 		serverWithProxies := NewServer(cfgWithProxies, logger)
+		serverWithProxies.InitializeRoutes()
 
 		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
 			// Check if IP extractor set the real IP
@@ -233,6 +239,7 @@ func TestServerMiddleware(t *testing.T) {
 			},
 		}
 		serverWithProxies := NewServer(cfgWithProxies, logger)
+		serverWithProxies.InitializeRoutes()
 
 		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
 			// Check if IP extractor set the real IP
@@ -267,6 +274,7 @@ func TestServerMiddleware(t *testing.T) {
 			},
 		}
 		serverWithProxies := NewServer(cfgWithProxies, logger)
+		serverWithProxies.InitializeRoutes()
 
 		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
 			// Check if IP extractor set the real IP
@@ -302,6 +310,7 @@ func TestServerMiddleware(t *testing.T) {
 			},
 		}
 		serverWithProxies := NewServer(cfgWithProxies, logger)
+		serverWithProxies.InitializeRoutes()
 
 		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
 			// Check if IP extractor set the real IP
@@ -336,6 +345,7 @@ func TestServerMiddleware(t *testing.T) {
 			},
 		}
 		serverWithProxies := NewServer(cfgWithProxies, logger)
+		serverWithProxies.InitializeRoutes()
 
 		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
 			// Check if IP extractor set the real IP
@@ -371,6 +381,7 @@ func TestServerStart(t *testing.T) {
 	}
 
 	server := NewServer(cfg, logger)
+	server.InitializeRoutes()
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -402,6 +413,7 @@ func TestServerShutdown(t *testing.T) {
 	}
 
 	server := NewServer(cfg, logger)
+	server.InitializeRoutes()
 
 	errChan := make(chan error, 1)
 	go func() {

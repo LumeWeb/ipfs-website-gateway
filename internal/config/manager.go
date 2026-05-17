@@ -253,6 +253,10 @@ func NewManager(opts ...ManagerOption) (*ManagerDefault, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to register logging config: %w", err)
 	}
+	err = m.Manager.RegisterStruct("rate_limit", RateLimitConfig{}) //nolint:staticcheck // QF1008
+	if err != nil {
+		return nil, fmt.Errorf("failed to register rate_limit config: %w", err)
+	}
 
 	// Register parent Config struct (must be after nested structs)
 	err = m.Manager.RegisterStruct("", Config{}) //nolint:staticcheck // QF1008
