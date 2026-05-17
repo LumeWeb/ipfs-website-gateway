@@ -18,6 +18,9 @@ jobs:
       with:
         go-version: 'stable'
 
+    - name: Create config directory
+      run: sudo mkdir -p /etc/lumeweb/gateway && sudo chmod -R 777 /etc/lumeweb
+
     - name: Download dependencies
       run: go mod download
 
