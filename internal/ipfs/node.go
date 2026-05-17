@@ -179,30 +179,25 @@ func (n *Node) connectToSeedPeer(ctx context.Context, seedPeer string) error {
 
 	var peerInfo *peer.AddrInfo
 
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
 	if madns.Matches(ma) {
 		resolved, err := madns.Resolve(ctx, ma)
 		if err != nil {
 			return fmt.Errorf("failed to resolve dnsaddr: %w", err)
 		}
-		for _, resolvedMA := range resolved {
-			info, err := peer.AddrInfoFromP2pAddr(resolvedMA)
-			if err == nil {
-				peerInfo = info
-				break
-			}
-		}
-		if peerInfo == nil {
+		infos, err := peer.AddrInfosFromP2pAddrs(resolved...)
+		if err != nil || len(infos) == 0 {
 			return fmt.Errorf("no resolved addresses with peer ID found for %s", addr)
 		}
+		peerInfo = &infos[0]
 	} else {
 		peerInfo, err = peer.AddrInfoFromP2pAddr(ma)
 		if err != nil {
 			return fmt.Errorf("failed to extract peer info from address: %w", err)
 		}
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 
 	if err := n.Host.Connect(ctx, *peerInfo); err != nil {
 		return fmt.Errorf("failed to connect to peer %s: %w", peerInfo.ID, err)
