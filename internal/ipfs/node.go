@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ipfs/boxo/bitswap"
@@ -161,11 +162,16 @@ func (n *Node) initHost(ctx context.Context) (host.Host, error) {
 }
 
 // connectToSeedPeer attempts to connect to a specified seed peer address.
-// The seedPeer parameter should be a multiaddr with peer ID (e.g.,
-// "/dns/ipfs.pinner.xyz/tcp/443/wss/p2p/Qm...").
+// The seedPeer parameter can be a full multiaddr with peer ID (e.g.,
+// "/dns/ipfs.pinner.xyz/tcp/443/wss/p2p/Qm...") or a plain DNS name (e.g.,
+// "ipfs.pinner.xyz") which will be resolved via dnsaddr.
 func (n *Node) connectToSeedPeer(ctx context.Context, seedPeer string) error {
-	// Parse the seed peer multiaddr
-	ma, err := multiaddr.NewMultiaddr(seedPeer)
+	addr := seedPeer
+	if !strings.HasPrefix(addr, "/") {
+		addr = "/dnsaddr/" + addr
+	}
+
+	ma, err := multiaddr.NewMultiaddr(addr)
 	if err != nil {
 		return fmt.Errorf("failed to parse seed peer address: %w", err)
 	}
