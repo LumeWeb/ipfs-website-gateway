@@ -3,6 +3,7 @@ module go.lumeweb.com/ipfs-website-gateway
 go 1.26.0
 
 require (
+	github.com/Oudwins/zog v0.22.0
 	github.com/alexliesenfeld/health v0.8.1
 	github.com/dnslink-std/go v0.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
@@ -18,11 +19,11 @@ require (
 	go.lumeweb.com/configmanager v0.3.24
 	go.lumeweb.com/ipfs-sdk v0.1.38
 	go.uber.org/zap v1.27.1
+	golang.org/x/time v0.12.0
 )
 
 require (
 	github.com/Jorropo/jsync v1.0.1 // indirect
-	github.com/Oudwins/zog v0.22.0 // indirect
 	github.com/alecthomas/units v0.0.0-20240927000941-0f3dac36c52b // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/avast/retry-go/v4 v4.7.0 // indirect
@@ -187,7 +188,6 @@ require (
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/telemetry v0.0.0-20260209163413-e7419c687ee4 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/time v0.12.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
 	golang.org/x/xerrors v0.0.0-20240903120638-7835f813f4da // indirect
 	gonum.org/v1/gonum v0.17.0 // indirect
