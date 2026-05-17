@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ipfs/boxo/bitswap"
@@ -14,6 +15,7 @@ import (
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 )
@@ -161,24 +163,43 @@ func (n *Node) initHost(ctx context.Context) (host.Host, error) {
 }
 
 // connectToSeedPeer attempts to connect to a specified seed peer address.
-// The seedPeer parameter should be a multiaddr with peer ID (e.g.,
-// "/dns/ipfs.pinner.xyz/tcp/443/wss/p2p/Qm...").
+// The seedPeer parameter can be a full multiaddr with peer ID (e.g.,
+// "/dns/ipfs.pinner.xyz/tcp/443/wss/p2p/Qm...") or a plain DNS name (e.g.,
+// "ipfs.pinner.xyz") which will be resolved via dnsaddr.
 func (n *Node) connectToSeedPeer(ctx context.Context, seedPeer string) error {
-	// Parse the seed peer multiaddr
-	ma, err := multiaddr.NewMultiaddr(seedPeer)
+	addr := seedPeer
+	if !strings.HasPrefix(addr, "/") {
+		addr = "/dnsaddr/" + addr
+	}
+
+	ma, err := multiaddr.NewMultiaddr(addr)
 	if err != nil {
 		return fmt.Errorf("failed to parse seed peer address: %w", err)
 	}
 
-	// Extract peer info from multiaddr
-	peerInfo, err := peer.AddrInfoFromP2pAddr(ma)
-	if err != nil {
-		return fmt.Errorf("failed to extract peer info from address: %w", err)
-	}
+	var peerInfo *peer.AddrInfo
 
-	// Attempt to connect with a timeout
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+
+	if madns.Matches(ma) {
+		resolved, err := madns.Resolve(ctx, ma)
+		if err != nil {
+			return fmt.Errorf("failed to resolve dnsaddr: %w", err)
+		}
+		// AddrInfosFromP2pAddrs is all-or-nothing: returns (nil, ErrInvalidAddr)
+		// if any addr lacks /p2p/, or (ais, nil) with all grouped by peer ID.
+		infos, err := peer.AddrInfosFromP2pAddrs(resolved...)
+		if err != nil || len(infos) == 0 {
+			return fmt.Errorf("no resolved addresses with peer ID found for %s", addr)
+		}
+		peerInfo = &infos[0]
+	} else {
+		peerInfo, err = peer.AddrInfoFromP2pAddr(ma)
+		if err != nil {
+			return fmt.Errorf("failed to extract peer info from address: %w", err)
+		}
+	}
 
 	if err := n.Host.Connect(ctx, *peerInfo); err != nil {
 		return fmt.Errorf("failed to connect to peer %s: %w", peerInfo.ID, err)
