@@ -2,6 +2,8 @@ package config
 
 import (
 	"time"
+
+	"github.com/Oudwins/zog"
 )
 
 // Config represents the complete application configuration.
@@ -63,11 +65,31 @@ func (c ServerConfig) Defaults() map[string]any {
 	}
 }
 
+// Schema implements the ConfigSchemaProvider interface for Zog validation.
+func (c ServerConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Port":           zog.Int().GTE(1).LTE(65535).Optional(),
+		"TrustedProxies": zog.Slice(zog.String()).Optional(),
+		"AllowedSecret":  zog.String().Optional(),
+	})
+}
+
 // Defaults implements the Defaults interface for providing default configuration values.
 func (c APIConfig) Defaults() map[string]any {
 	return map[string]any{
 		"Timeout": 30 * time.Second,
 	}
+}
+
+// Schema implements the ConfigSchemaProvider interface for Zog validation.
+func (c APIConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"URL":     zog.String().Optional(),
+		"Secret":  zog.String().Optional(),
+		"Timeout": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
+			return *valPtr > 0
+		}, zog.Message("timeout must be greater than 0")),
+	})
 }
 
 // Defaults implements the Defaults interface for providing default configuration values.
@@ -76,6 +98,14 @@ func (c IPFSConfig) Defaults() map[string]any {
 		"SeedPeer": "ipfs.pinner.xyz",
 		"RepoPath": "./data/ipfs",
 	}
+}
+
+// Schema implements the ConfigSchemaProvider interface for Zog validation.
+func (c IPFSConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"SeedPeer": zog.String().Optional(),
+		"RepoPath": zog.String().Optional(),
+	})
 }
 
 // Defaults implements the Defaults interface for providing default configuration values.
@@ -89,11 +119,29 @@ func (c CacheConfig) Defaults() map[string]any {
 	}
 }
 
+// Schema implements the ConfigSchemaProvider interface for Zog validation.
+func (c CacheConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"StatusCacheTTL":       zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"StatusCacheLRUSize":   zog.Int().GT(0).Optional(),
+		"ContentCachePath":     zog.String().Optional(),
+		"ContentCacheMaxBytes": zog.Int64().GT(0).Optional(),
+		"ContentCacheLRUSize":  zog.Int().GT(0).Optional(),
+	})
+}
+
 // Defaults implements the Defaults interface for providing default configuration values.
 func (c LoggingConfig) Defaults() map[string]any {
 	return map[string]any{
 		"Level": "info",
 	}
+}
+
+// Schema implements the ConfigSchemaProvider interface for Zog validation.
+func (c LoggingConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Level": zog.String().OneOf([]string{"debug", "info", "warn", "error"}).Optional(),
+	})
 }
 
 // Defaults implements the Defaults interface for providing default configuration values.
@@ -104,6 +152,20 @@ func (c RateLimitConfig) Defaults() map[string]any {
 		"Burst":     10,
 		"ExpiresIn": 5 * time.Minute,
 	}
+}
+
+// Schema implements the ConfigSchemaProvider interface for Zog validation.
+// When rate limiting is enabled, Rate must be (0,1000], Burst must be >0,
+// and ExpiresIn must be (0,24h].
+func (c RateLimitConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Enabled":   zog.Bool().Optional(),
+		"Rate":      zog.Float64().GT(0).LTE(1000).Optional(),
+		"Burst":     zog.Int().GT(0).Optional(),
+		"ExpiresIn": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
+			return *valPtr > 0 && *valPtr <= 24*time.Hour
+		}, zog.Message("expires_in must be between 0 and 24 hours")),
+	})
 }
 
 
