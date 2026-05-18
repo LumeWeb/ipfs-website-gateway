@@ -32,8 +32,9 @@ type APIConfig struct {
 
 // IPFSConfig holds IPFS network configuration settings.
 type IPFSConfig struct {
-	SeedPeer string `config:"seed_peer"` // default: ipfs.pinner.xyz
-	RepoPath string `config:"repo_path"` // IPFS repository path
+	SeedPeer        string        `config:"seed_peer"`
+	ConnectTimeout  time.Duration `config:"connect_timeout"`
+	RetrievalTimeout time.Duration `config:"retrieval_timeout"`
 }
 
 // CacheConfig holds caching configuration settings for both status and content.
@@ -95,16 +96,17 @@ func (c APIConfig) Schema() zog.ZogSchema {
 // Defaults implements the Defaults interface for providing default configuration values.
 func (c IPFSConfig) Defaults() map[string]any {
 	return map[string]any{
-		"SeedPeer": "ipfs.pinner.xyz",
-		"RepoPath": "./data/ipfs",
+		"SeedPeer":        "ipfs.pinner.xyz",
+		"ConnectTimeout":  30 * time.Second,
+		"RetrievalTimeout": 30 * time.Second,
 	}
 }
 
-// Schema implements the ConfigSchemaProvider interface for Zog validation.
 func (c IPFSConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
-		"SeedPeer": zog.String().Optional(),
-		"RepoPath": zog.String().Optional(),
+		"SeedPeer":         zog.String().Optional(),
+		"ConnectTimeout":   zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"RetrievalTimeout": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 	})
 }
 

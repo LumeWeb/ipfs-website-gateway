@@ -1,19 +1,17 @@
 # IPFS Website Gateway
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://golang.org/)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://golang.org/)
 
 A stateless edge IPFS gateway that serves DNSLink websites with strict access control via an internal API. Built with Go, Echo, and Boxo IPFS.
 
 ## Features
 
 - **DNSLink vhost support** - Serves websites via virtual hosting using DNSLink records (`_dnslink.{domain}`)
-- **Internal API integration** - Validates website access against a central API with `X-Gateway-Secret` authentication
-- **Dual-layer caching**:
-  - In-memory LRU cache for website status queries (TTL-based, DoS protection)
-  - Disk-based content cache for IPFS blocks with LRU eviction
-- **Boxo IPFS integration** - Lightweight IPFS node for content fetching from P2P network
-- **HTTP range requests** - Support for partial content delivery (video streaming, resume downloads)
+- **Access control** - Validates website access against a central API via ipfs-sdk before serving
+- **Status caching** - In-memory LRU cache for website status queries (TTL-based, DoS protection)
+- **Boxo IPFS integration** - Lightweight Bitswap client-only node for content fetching from P2P network
+- **Caddy On-Demand TLS** - `/allowed` endpoint for certificate issuance validation with optional rate limiting and auth
 - **Health monitoring** - `/healthz` endpoint checking internal API and IPFS peer connectivity
 - **Graceful shutdown** - Proper cleanup on SIGINT/SIGTERM
 
@@ -27,35 +25,40 @@ A stateless edge IPFS gateway that serves DNSLink websites with strict access co
        ▼
 ┌─────────────────────────────────┐
 │   Echo HTTP Server              │
-│   - RealIP middleware           │
-│   - Logger middleware           │
 │   - Recovery middleware         │
+│   - Logger middleware           │
 └──────┬──────────────────────────┘
-       │ HandleGatewayRequest
+       │ AccessControlMiddleware
        ▼
 ┌─────────────────────────────────┐
 │   Request Pipeline              │
 │   1. Extract domain from Host   │
-│   2. Validate DNSLink TXT record │
-│   3. Check status cache (LRU)   │
-│   4. Query internal API         │
-│   5. Check result (404/410)     │
-│   6. Fetch content from IPFS    │
-│   7. Serve with proper headers  │
+│      or X-Forwarded-Host        │
+│   2. Strip port (IPv6-safe)    │
+│   3. Passthrough for IPs and   │
+│      /ipfs/, /ipns/ paths      │
+│   4. Check status cache (LRU)   │
+│   5. Query internal API         │
+│   6. Check result               │
+│      (404/410/active)           │
+│   7. Rewrite to /ipns/{domain} │
 └──────┬──────────────────────────┘
        │
-       ├───► DNSLink Validator
-       ├───► Internal API Client
-       ├───► Status Cache (LRU, in-memory)
-       ├───► IPFS Fetcher (Boxo)
-       └────► Content Cache (Disk, LRU)
+       ▼
+┌─────────────────────────────────┐
+│   Boxo Gateway Handler          │
+│   - DNSLink resolution          │
+│   - UnixFS content serving      │
+│   - Headers (ETag, Cache-Control)│
+│   - Range requests              │
+└─────────────────────────────────┘
 ```
 
 ## Installation
 
 ### Prerequisites
 
-- **Go 1.25** or later
+- **Go 1.26** or later
 - Network access to internal API
 - DNS server with DNSLink records (for serving websites)
 
@@ -104,12 +107,14 @@ Configuration is loaded from multiple sources in priority order:
 2. **Configuration file** (YAML)
 3. **Default values** (lowest priority)
 
-#### Config File Locations
+#### Config File Search
 
-The gateway searches for configuration files in this order:
-- `/etc/lumeweb/gateway/gateway.yaml`
-- `$HOME/.lumeweb/gateway/gateway.yaml`
-- `./gateway.yaml` (current directory)
+The gateway searches for `gateway.yaml` in these directories (in order):
+- `/etc/lumeweb/gateway/`
+- `$HOME/.lumeweb/gateway/`
+- `./` (current directory)
+
+If no config file is found, `gateway.yaml` is created in the first writable directory.
 
 #### Example Config File
 
@@ -117,6 +122,7 @@ The gateway searches for configuration files in this order:
 server:
   port: 8080
   trusted_proxies: []
+  allowed_secret: ""
 
 api:
   url: https://api.example.com
@@ -136,6 +142,12 @@ cache:
 
 logging:
   level: info
+
+rate_limit:
+  enabled: false
+  rate: 0.167
+  burst: 10
+  expires_in: 5m
 ```
 
 #### Environment Variables
@@ -151,6 +163,7 @@ All configuration can be set via environment variables using the format `GATEWAY
 |----------|-------------|---------|
 | `GATEWAY__SERVER__PORT` | Server port | `8080` |
 | `GATEWAY__SERVER__TRUSTED_PROXIES` | Trusted proxy IPs | `[]` |
+| `GATEWAY__SERVER__ALLOWED_SECRET` | Auth secret for /allowed endpoint | `""` |
 | `GATEWAY__API__TIMEOUT` | API request timeout | `30s` |
 | `GATEWAY__IPFS__SEED_PEER` | IPFS seed peer | `ipfs.pinner.xyz` |
 | `GATEWAY__IPFS__REPO_PATH` | IPFS repository path | `./data/ipfs` |
@@ -160,6 +173,10 @@ All configuration can be set via environment variables using the format `GATEWAY
 | `GATEWAY__CACHE__CONTENT_CACHE_MAX_BYTES` | Content cache max size | `10737418240` (10GB) |
 | `GATEWAY__CACHE__CONTENT_CACHE_LRU_SIZE` | Content cache size | `100000` |
 | `GATEWAY__LOGGING__LEVEL` | Log level | `info` |
+| `GATEWAY__RATE_LIMIT__ENABLED` | Enable rate limiting on /allowed | `false` |
+| `GATEWAY__RATE_LIMIT__RATE` | Rate limit (requests/second) | `0.167` |
+| `GATEWAY__RATE_LIMIT__BURST` | Rate limit burst | `10` |
+| `GATEWAY__RATE_LIMIT__EXPIRES_IN` | Rate limiter cleanup interval | `5m` |
 
 ## API Reference
 
@@ -174,10 +191,10 @@ Returns health status of gateway dependencies.
 {
   "status": "pass",
   "checks": {
-    "api": {
+    "internal_api": {
       "status": "pass"
     },
-    "ipfs": {
+    "ipfs_peer": {
       "status": "pass",
       "data": {
         "peer_count": 5
@@ -189,16 +206,17 @@ Returns health status of gateway dependencies.
 
 ### Gateway Request
 
-**Endpoint:** `GET /{path}`
+**Endpoint:** `ANY /*path`
 
-Serves content from IPFS based on DNSLink resolution of the `Host` header.
+Serves content from IPFS based on DNSLink resolution of the `Host` (or `X-Forwarded-Host`) header.
 
 **Headers:**
 - `Host` - Domain name with DNSLink record
+- `X-Forwarded-Host` - Alternative domain header (takes precedence over Host)
 
 **Responses:**
 - `200 OK` - Content served successfully
-- `404 Not Found` - Website not found in internal API
+- `404 Not Found` - Website not found or not active
 - `410 Gone` - Website is broken or removed
 - `500 Internal Server Error` - Server error
 
@@ -207,6 +225,20 @@ Serves content from IPFS based on DNSLink resolution of the `Host` header.
 curl -H "Host: example.com" http://localhost:8080/
 ```
 
+### Caddy On-Demand TLS
+
+**Endpoint:** `GET /allowed?domain=...&secret=...`
+
+Validates whether a domain is allowed for TLS certificate issuance. Used by Caddy's On-Demand TLS feature.
+
+**Parameters:**
+- `domain` - Domain name to validate
+- `secret` - Authentication secret (required if `AllowedSecret` is configured)
+
+**Responses:**
+- `200 OK` - Domain is allowed
+- `400 Bad Request` - Domain not allowed or auth failed
+
 ## Development
 
 ### Project Structure
@@ -214,11 +246,13 @@ curl -H "Host: example.com" http://localhost:8080/
 ```
 .
 ├── cmd/gateway/          # CLI entry point
+├── docs/                 # Documentation
 ├── internal/
-│   ├── api/             # Internal API client
+│   ├── api/             # Internal API client (ipfs-sdk)
 │   ├── cache/           # Status and content cache
 │   ├── config/          # Configuration management
 │   ├── dns/             # DNSLink validation
+│   ├── gateway/         # Boxo gateway handler + access control
 │   ├── health/          # Health checks
 │   ├── ipfs/            # IPFS node and fetcher
 │   └── server/          # Echo server setup
@@ -250,13 +284,6 @@ go test ./internal/server/...
 ```bash
 # Mockery is pre-installed at $HOME/go/bin/mockery
 $HOME/go/bin/mockery
-```
-
-### Regenerating API Client
-
-```bash
-# Generate OpenAPI client from swagger.yaml
-oapi-codegen -config oai-codegen.yaml
 ```
 
 ## License

@@ -118,9 +118,6 @@ func TestDefaultsInterface(t *testing.T) {
 	if ipfsDefaults["SeedPeer"] != "ipfs.pinner.xyz" {
 		t.Errorf("Expected default IPFS.SeedPeer to be 'ipfs.pinner.xyz', got %v", ipfsDefaults["SeedPeer"])
 	}
-	if ipfsDefaults["RepoPath"] != "./data/ipfs" {
-		t.Errorf("Expected default IPFS.RepoPath to be './data/ipfs', got %v", ipfsDefaults["RepoPath"])
-	}
 
 	// Test CacheConfig defaults
 	cacheCfg := CacheConfig{}
