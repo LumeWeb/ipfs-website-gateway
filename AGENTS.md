@@ -126,15 +126,18 @@ This is a stateless edge IPFS gateway that serves DNSLink websites with strict a
 - **ContentBlockstore**: Adapter that wraps ContentCache to satisfy Boxo's `blockstore.Blockstore` interface
   - Bridges between Boxo's `cid.Cid`/`blocks.Block` types and ContentCache's string/[]byte storage
   - Supports all Blockstore methods: Get, Put, Has, DeleteBlock, GetSize, PutMany, AllKeysChan, View
+  - Returns `ipld.ErrNotFound` on cache miss (critical — allows blockservice to fall through to Bitswap)
   - Used as the base blockstore for the IPFS node
 
 #### IPFS Layer (`internal/ipfs/`)
 - **Node**: Minimal Boxo IPFS node with libp2p host and blockservice
   - Accepts `blockstore.Blockstore` via dependency injection (typically `ContentBlockstore`)
   - Bitswap client-only: `bitswap.WithServerEnabled(false)` — cannot serve blocks to peers
+  - No DHT — Bitswap has `nil` providerFinder, can only fetch from connected peers
+  - Only connects to the configured seed peer (default: `ipfs.pinner.xyz`)
+  - This ensures the gateway only serves content the seed peer has — prevents becoming a public gateway
   - Relay disabled: `libp2p.DisableRelay()`
   - Supports NAT traversal and hole punching: `libp2p.EnableHolePunching()`
-  - Connects to seed peer for bootstrap (default: `ipfs.pinner.xyz`)
   - Seed peer `dnsaddr` resolution: plain DNS names auto-prefixed with `/dnsaddr/`
   - Seed peer connect timeout: 30s (hard-coded)
   - `UserAgent: "ipfs-website-gateway/1.0.0"`
@@ -241,7 +244,6 @@ Interfaces defined by consumers (Go convention):
 - `GATEWAY__SERVER__ALLOWED_SECRET`: "" (auth for /allowed endpoint; empty = no auth)
 - `GATEWAY__API__TIMEOUT`: 30s
 - `GATEWAY__IPFS__SEED_PEER`: "ipfs.pinner.xyz"
-- `GATEWAY__IPFS__REPO_PATH`: "./data/ipfs"
 - `GATEWAY__CACHE__STATUS_CACHE_TTL`: 5m
 - `GATEWAY__CACHE__STATUS_CACHE_LRU_SIZE`: 1000
 - `GATEWAY__CACHE__CONTENT_CACHE_PATH`: "/tmp/ipfs-cache"
@@ -257,4 +259,3 @@ Interfaces defined by consumers (Go convention):
 
 From the codebase:
 - Make `RetrievalTimeout` (30s) and seed peer connect timeout (30s) configurable instead of hard-coded
-- Remove `GATEWAY__IPFS__REPO_PATH` config field (no longer used after blockstore refactor)

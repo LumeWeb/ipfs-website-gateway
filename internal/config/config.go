@@ -33,7 +33,6 @@ type APIConfig struct {
 // IPFSConfig holds IPFS network configuration settings.
 type IPFSConfig struct {
 	SeedPeer string `config:"seed_peer"` // default: ipfs.pinner.xyz
-	RepoPath string `config:"repo_path"` // IPFS repository path
 }
 
 // CacheConfig holds caching configuration settings for both status and content.
@@ -96,7 +95,6 @@ func (c APIConfig) Schema() zog.ZogSchema {
 func (c IPFSConfig) Defaults() map[string]any {
 	return map[string]any{
 		"SeedPeer": "ipfs.pinner.xyz",
-		"RepoPath": "./data/ipfs",
 	}
 }
 
@@ -104,7 +102,6 @@ func (c IPFSConfig) Defaults() map[string]any {
 func (c IPFSConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
 		"SeedPeer": zog.String().Optional(),
-		"RepoPath": zog.String().Optional(),
 	})
 }
 
