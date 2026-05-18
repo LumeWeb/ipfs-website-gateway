@@ -144,7 +144,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	srv.SetAPIClient(apiClient)
 	srv.SetStatusCache(statusCache)
 
-	gateway, err := gw.NewGateway(node.BlockService, node.DHT, apiClient, statusCache, logger)
+	gateway, err := gw.NewGateway(node.BlockService, apiClient, statusCache, logger)
 	if err != nil {
 		logger.Error("failed to initialize gateway", zap.Error(err))
 		return fmt.Errorf("failed to initialize gateway: %w", err)
@@ -208,14 +208,11 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 			"bitswap/client/getter",
 			"bitswap/session",
 			"bitswap/bsnet",
-			"routing/provqrymgr",
 			"blockstore",
 			"path/resolver",
 			"unixfs",
 			"namesys",
 			"ipns",
-			"dht",
-			"providers",
 		}
 		for _, s := range subsystems {
 			_ = ipfslog.SetLogLevel(s, "debug")

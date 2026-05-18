@@ -12,7 +12,6 @@ import (
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
 	ds "github.com/ipfs/go-datastore"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -24,7 +23,6 @@ import (
 type Node struct {
 	Host         host.Host
 	BlockService blockservice.BlockService
-	DHT          *dht.IpfsDHT
 	ctx          context.Context
 	cancel       context.CancelFunc
 	logger       *zap.Logger
@@ -51,28 +49,9 @@ func NewNode(ctx context.Context, seedPeer string, bs blockstore.Blockstore, log
 
 	node.Host = host
 
-	var dhtOpts []dht.Option
-	dhtOpts = append(dhtOpts, dht.Mode(dht.ModeClient))
-
-	if seedPeer != "" {
-		seedAddrInfo, err := resolveSeedPeer(nodeCtx, seedPeer)
-		if err != nil {
-			logger.Warn("failed to resolve seed peer for DHT bootstrap", zap.String("peer", seedPeer), zap.Error(err))
-		} else {
-			dhtOpts = append(dhtOpts, dht.BootstrapPeers(*seedAddrInfo))
-		}
-	}
-
-	kadDHT, err := dht.New(nodeCtx, host, dhtOpts...)
-	if err != nil {
-		cancel()
-		return nil, fmt.Errorf("failed to initialize DHT: %w", err)
-	}
-	node.DHT = kadDHT
-
 	bsnetInstance := bsnet.NewFromIpfsHost(host)
 
-	bswapInstance := bitswap.New(nodeCtx, bsnetInstance, kadDHT, bs, bitswap.WithServerEnabled(false))
+	bswapInstance := bitswap.New(nodeCtx, bsnetInstance, nil, bs, bitswap.WithServerEnabled(false))
 
 	node.BlockService = blockservice.New(bs, bswapInstance)
 
@@ -80,10 +59,6 @@ func NewNode(ctx context.Context, seedPeer string, bs blockstore.Blockstore, log
 		if err := node.connectToSeedPeer(nodeCtx, seedPeer); err != nil {
 			logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
 		}
-	}
-
-	if err := kadDHT.Bootstrap(nodeCtx); err != nil {
-		logger.Warn("failed to bootstrap DHT", zap.Error(err))
 	}
 
 	logger.Info("IPFS node initialized",
@@ -165,12 +140,6 @@ func (n *Node) Close() error {
 
 	if n.cancel != nil {
 		n.cancel()
-	}
-
-	if n.DHT != nil {
-		if err := n.DHT.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("failed to close DHT: %w", err))
-		}
 	}
 
 	if n.Host != nil {

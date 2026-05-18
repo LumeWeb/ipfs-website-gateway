@@ -11,7 +11,7 @@ import (
 	"github.com/ipfs/boxo/gateway"
 	"github.com/ipfs/boxo/namesys"
 	"github.com/ipfs/boxo/path"
-	"github.com/libp2p/go-libp2p/core/routing"
+	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
@@ -26,13 +26,13 @@ type Gateway struct {
 	statusCache *cache.StatusCache
 }
 
-func NewGateway(bs blockservice.BlockService, router routing.ValueStore, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger) (*Gateway, error) {
+func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger) (*Gateway, error) {
 	ns, err := gateway.NewDNSResolver(nil, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	nameSystem, err := namesys.NewNameSystem(router, namesys.WithDNSResolver(ns))
+	nameSystem, err := namesys.NewNameSystem(routinghelpers.Null{}, namesys.WithDNSResolver(ns))
 	if err != nil {
 		return nil, err
 	}
