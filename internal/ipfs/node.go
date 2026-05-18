@@ -28,7 +28,7 @@ type Node struct {
 	logger       *zap.Logger
 }
 
-func NewNode(ctx context.Context, seedPeer string, bs blockstore.Blockstore, logger *zap.Logger) (*Node, error) {
+func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, bs blockstore.Blockstore, logger *zap.Logger) (*Node, error) {
 	if bs == nil {
 		return nil, fmt.Errorf("blockstore cannot be nil")
 	}
@@ -56,7 +56,7 @@ func NewNode(ctx context.Context, seedPeer string, bs blockstore.Blockstore, log
 	node.BlockService = blockservice.New(bs, bswapInstance)
 
 	if seedPeer != "" {
-		if err := node.connectToSeedPeer(nodeCtx, seedPeer); err != nil {
+		if err := node.connectToSeedPeer(nodeCtx, seedPeer, connectTimeout); err != nil {
 			logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
 		}
 	}
@@ -82,7 +82,7 @@ func (n *Node) initHost(ctx context.Context) (host.Host, error) {
 	return h, nil
 }
 
-func resolveSeedPeer(ctx context.Context, seedPeer string) (*peer.AddrInfo, error) {
+func resolveSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration) (*peer.AddrInfo, error) {
 	addr := seedPeer
 	if !strings.HasPrefix(addr, "/") {
 		addr = "/dnsaddr/" + addr
@@ -93,7 +93,7 @@ func resolveSeedPeer(ctx context.Context, seedPeer string) (*peer.AddrInfo, erro
 		return nil, fmt.Errorf("failed to parse seed peer address: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	if madns.Matches(ma) {
@@ -116,8 +116,8 @@ func resolveSeedPeer(ctx context.Context, seedPeer string) (*peer.AddrInfo, erro
 	return peerInfo, nil
 }
 
-func (n *Node) connectToSeedPeer(ctx context.Context, seedPeer string) error {
-	peerInfo, err := resolveSeedPeer(ctx, seedPeer)
+func (n *Node) connectToSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration) error {
+	peerInfo, err := resolveSeedPeer(ctx, seedPeer, timeout)
 	if err != nil {
 		return err
 	}

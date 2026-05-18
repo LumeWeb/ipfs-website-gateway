@@ -139,7 +139,7 @@ This is a stateless edge IPFS gateway that serves DNSLink websites with strict a
   - Relay disabled: `libp2p.DisableRelay()`
   - Supports NAT traversal and hole punching: `libp2p.EnableHolePunching()`
   - Seed peer `dnsaddr` resolution: plain DNS names auto-prefixed with `/dnsaddr/`
-  - Seed peer connect timeout: 30s (hard-coded)
+  - Seed peer connect timeout: configurable via `GATEWAY__IPFS__CONNECT_TIMEOUT`
   - `UserAgent: "ipfs-website-gateway/1.0.0"`
 - **CreateInMemoryBlockstore()**: Helper for creating in-memory blockstore with Boxo's bloom filter + twoqueue cache acceleration
 
@@ -147,7 +147,7 @@ This is a stateless edge IPFS gateway that serves DNSLink websites with strict a
 - **Gateway**: Wraps boxo's `BlocksBackend` and `NewHandler` to serve IPFS content
   - `NewGateway(bs, apiClient, statusCache, logger)` — takes BlockService, API client, status cache, logger
   - Creates DNS resolver → name system (with `routinghelpers.Null{}` — no DHT) → BlocksBackend → handler
-  - Gateway config: `NoDNSLink: true` (DNSLink handled by AccessControlMiddleware, not boxo), `DeserializedResponses: true`, `RetrievalTimeout: 30s` (hard-coded), empty `PublicGateways` map
+  - Gateway config: `NoDNSLink: true` (DNSLink handled by AccessControlMiddleware, not boxo), `DeserializedResponses: true`, `RetrievalTimeout` configurable via `GATEWAY__IPFS__RETRIEVAL_TIMEOUT`, empty `PublicGateways` map
   - `CheckAccess(ctx, domain)`: status cache lookup then API query for domain access control
   - `GetDNSLinkRecord(ctx, hostname)`: delegates to backend for DNSLink path resolution
   - Implements `http.Handler` via `ServeHTTP()`
@@ -244,6 +244,8 @@ Interfaces defined by consumers (Go convention):
 - `GATEWAY__SERVER__ALLOWED_SECRET`: "" (auth for /allowed endpoint; empty = no auth)
 - `GATEWAY__API__TIMEOUT`: 30s
 - `GATEWAY__IPFS__SEED_PEER`: "ipfs.pinner.xyz"
+- `GATEWAY__IPFS__CONNECT_TIMEOUT`: 30s
+- `GATEWAY__IPFS__RETRIEVAL_TIMEOUT`: 30s
 - `GATEWAY__CACHE__STATUS_CACHE_TTL`: 5m
 - `GATEWAY__CACHE__STATUS_CACHE_LRU_SIZE`: 1000
 - `GATEWAY__CACHE__CONTENT_CACHE_PATH`: "/tmp/ipfs-cache"
@@ -254,8 +256,3 @@ Interfaces defined by consumers (Go convention):
 - `GATEWAY__RATE_LIMIT__RATE`: 0.167 (requests per second)
 - `GATEWAY__RATE_LIMIT__BURST`: 10
 - `GATEWAY__RATE_LIMIT__EXPIRES_IN`: 5m
-
-## TODOs and Future Work
-
-From the codebase:
-- Make `RetrievalTimeout` (30s) and seed peer connect timeout (30s) configurable instead of hard-coded

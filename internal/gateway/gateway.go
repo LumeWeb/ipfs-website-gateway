@@ -26,7 +26,7 @@ type Gateway struct {
 	statusCache *cache.StatusCache
 }
 
-func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger) (*Gateway, error) {
+func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration) (*Gateway, error) {
 	ns, err := gateway.NewDNSResolver(nil, nil)
 	if err != nil {
 		return nil, err
@@ -46,7 +46,7 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 		NoDNSLink:             true,
 		DeserializedResponses: true,
 		PublicGateways:        map[string]*gateway.PublicGateway{},
-		RetrievalTimeout:      30 * time.Second,
+		RetrievalTimeout:      retrievalTimeout,
 	}
 
 	handler := gateway.NewHandler(cfg, backend)
