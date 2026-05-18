@@ -69,15 +69,13 @@ func TestServerRoutes(t *testing.T) {
 			name:           "ipfs cid without path",
 			method:         http.MethodGet,
 			path:           "/ipfs/QmTest",
-			expectedStatus: http.StatusNotImplemented,
-			expectedBody:   "IPFS gateway handler not yet implemented",
+			expectedStatus: http.StatusNotFound,
 		},
 		{
 			name:           "ipfs cid with path",
 			method:         http.MethodGet,
 			path:           "/ipfs/QmTest/some/path/file.txt",
-			expectedStatus: http.StatusNotImplemented,
-			expectedBody:   "IPFS gateway handler not yet implemented",
+			expectedStatus: http.StatusNotFound,
 		},
 	}
 

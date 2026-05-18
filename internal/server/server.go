@@ -3,17 +3,16 @@ package server
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
 	"github.com/alexliesenfeld/health"
-	"github.com/ipfs/go-cid"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	"golang.org/x/time/rate"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
+	gw "go.lumeweb.com/ipfs-website-gateway/internal/gateway"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
 )
@@ -33,8 +32,8 @@ type Server struct {
 	dns          DNSValidator
 	api          api.APIClient
 	statusCache  StatusCache
-	fetcher      IPFSFetcher
 	healthChecker health.Checker
+	gateway      *gw.Gateway
 }
 
 // NewServer creates and configures a new Echo server instance.
@@ -118,13 +117,13 @@ func (s *Server) setupRoutes(e *echo.Echo) {
 		e.GET("/allowed", s.authMiddleware(s.allowedHandler))
 	}
 
-	e.GET("/ipfs/:cid", func(c echo.Context) error {
-		return c.String(http.StatusNotImplemented, "IPFS gateway handler not yet implemented")
-	})
+	if s.gateway != nil {
+		gatewayHandler := s.gateway.Handler()
+		accessControl := gw.NewAccessControlMiddleware(s.gateway, s.logger)
+		wrappedHandler := accessControl.Wrap(gatewayHandler)
 
-	e.GET("/ipfs/:cid/*", func(c echo.Context) error {
-		return c.String(http.StatusNotImplemented, "IPFS gateway handler not yet implemented")
-	})
+		e.Any("/*", echo.WrapHandler(wrappedHandler))
+	}
 }
 
 // allowedHandler handles Caddy On-Demand TLS requests to validate domains.
@@ -241,7 +240,7 @@ func isValidDomain(domain string) bool {
 		}
 
 		for _, r := range label {
-			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
 				return false
 			}
 		}
@@ -267,7 +266,6 @@ func (s *Server) healthCheckHandler(c echo.Context) error {
 
 // Start begins serving HTTP requests on the specified address.
 func (s *Server) Start(addr string) error {
-	s.logger.Info("server starting", zap.String("addr", addr))
 	return s.echo.Start(addr)
 }
 
@@ -291,11 +289,6 @@ type StatusCache interface {
 	SetInvalid(domain string)
 }
 
-// IPFSFetcher defines the interface for fetching content from IPFS.
-type IPFSFetcher interface {
-	FetchUnixFile(ctx context.Context, c cid.Cid, path []string) (io.ReadSeekCloser, string, error)
-}
-
 // SetHealthChecker sets the health checker for the server.
 func (s *Server) SetHealthChecker(checker health.Checker) {
 	s.healthChecker = checker
@@ -316,8 +309,7 @@ func (s *Server) SetStatusCache(cache StatusCache) {
 	s.statusCache = cache
 }
 
-// SetIPFSFetcher sets the IPFS content fetcher for the server.
-func (s *Server) SetIPFSFetcher(fetcher IPFSFetcher) {
-	s.fetcher = fetcher
+func (s *Server) SetGateway(g *gw.Gateway) {
+	s.gateway = g
 }
 

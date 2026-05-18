@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
@@ -16,11 +18,16 @@ type sdkClient struct {
 	websites ipfs.WebsitesService
 }
 
-func NewClient(baseURL, secret string, timeoutSeconds int) (APIClient, error) {
+func NewClient(baseURL, secret string, timeout time.Duration) (APIClient, error) {
 	client, err := ipfs.NewClient(baseURL, "", ipfs.WithGatewaySecret(secret))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ipfs-sdk client: %w", err)
 	}
+
+	client.SetHTTPClient(&http.Client{
+		Timeout: timeout,
+	})
+
 	return &sdkClient{websites: client.Websites()}, nil
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -11,26 +12,27 @@ import (
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
 
+	ipfslog "github.com/ipfs/go-log/v2"
+
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 	"go.lumeweb.com/ipfs-website-gateway/internal/dns"
+	gw "go.lumeweb.com/ipfs-website-gateway/internal/gateway"
 	"go.lumeweb.com/ipfs-website-gateway/internal/health"
 	"go.lumeweb.com/ipfs-website-gateway/internal/ipfs"
 	"go.lumeweb.com/ipfs-website-gateway/internal/server"
 )
 
 var (
-	cfg     *config.Config
-	logger  *zap.Logger
-	node    *ipfs.Node
-	srv     *server.Server
+	cfg    *config.Config
+	logger *zap.Logger
+	node   *ipfs.Node
+	srv    *server.Server
 )
 
-// DNSValidatorAdapter adapts the dns.ValidateDNSLink function to the server.DNSValidator interface.
 type DNSValidatorAdapter struct{}
 
-// ValidateDNSLink implements the server.DNSValidator interface.
 func (d *DNSValidatorAdapter) ValidateDNSLink(ctx context.Context, domain string) (string, error) {
 	return dns.ValidateDNSLink(ctx, domain)
 }
@@ -57,39 +59,32 @@ func main() {
 }
 
 func runGateway(ctx context.Context, cmd *cli.Command) error {
-	// 1. Load configuration using Manager
 	var err error
-	
-	// Prepare manager options
+
 	var opts []config.ManagerOption
 	if configPath := cmd.String("config"); configPath != "" {
 		opts = append(opts, config.WithConfigPaths([]string{configPath}))
 	}
-	
-	// Create config manager
+
 	cfgMgr, err := config.NewManager(opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create config manager: %w", err)
 	}
-	
-	// Initialize temporary logger for config loading
+
 	logger = zap.NewNop()
 	cfgMgr.SetLogger(logger)
-	
-	// Load configuration
+
 	if err := cfgMgr.Init(); err != nil {
 		return fmt.Errorf("failed to initialize config: %w", err)
 	}
 	cfg = cfgMgr.Config()
 
-	// 2. Initialize logger (Zap) with loaded config
 	logger, err = initLogger(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
 	defer func() { _ = logger.Sync() }()
-	
-	// Set the real logger on config manager
+
 	cfgMgr.SetLogger(logger)
 
 	logger.Info("starting IPFS gateway",
@@ -97,8 +92,40 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		zap.Int("port", cfg.Server.Port),
 	)
 
-	// 3. Initialize IPFS node
-	node, err = initIPFSNode(ctx, cfg, logger)
+	statusCache, err := cache.NewStatusCache(cfg.Cache.StatusCacheLRUSize, cfg.Cache.StatusCacheTTL)
+	if err != nil {
+		logger.Error("failed to initialize status cache", zap.Error(err))
+		return fmt.Errorf("failed to initialize status cache: %w", err)
+	}
+	logger.Info("Status cache initialized",
+		zap.Int("size", cfg.Cache.StatusCacheLRUSize),
+		zap.Duration("ttl", cfg.Cache.StatusCacheTTL),
+	)
+
+	apiClient, err := api.NewClient(cfg.API.URL, cfg.API.Secret, cfg.API.Timeout)
+	if err != nil {
+		logger.Error("failed to initialize API client", zap.Error(err))
+		return fmt.Errorf("failed to initialize API client: %w", err)
+	}
+	logger.Info("API client initialized", zap.String("url", cfg.API.URL))
+
+	contentCache, err := cache.NewContentCache(
+		cfg.Cache.ContentCachePath,
+		cfg.Cache.ContentCacheMaxBytes,
+		cfg.Cache.ContentCacheLRUSize,
+	)
+	if err != nil {
+		logger.Error("failed to initialize content cache", zap.Error(err))
+		return fmt.Errorf("failed to initialize content cache: %w", err)
+	}
+	logger.Info("Content cache initialized",
+		zap.String("path", cfg.Cache.ContentCachePath),
+		zap.Int64("max_bytes", cfg.Cache.ContentCacheMaxBytes),
+	)
+
+	contentBs := cache.NewContentBlockstore(contentCache, logger)
+
+	node, err = initIPFSNode(ctx, cfg, contentBs, logger)
 	if err != nil {
 		logger.Error("failed to initialize IPFS node", zap.Error(err))
 		return fmt.Errorf("failed to initialize IPFS node: %w", err)
@@ -110,36 +137,25 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		zap.Int("addrs", len(node.Host.Addrs())),
 	)
 
-	// 4. Initialize API client (using ipfs-sdk)
-	apiClient, err := api.NewClient(cfg.API.URL, cfg.API.Secret, int(cfg.API.Timeout.Seconds()))
-	if err != nil {
-		logger.Error("failed to initialize API client", zap.Error(err))
-		return fmt.Errorf("failed to initialize API client: %w", err)
-	}
-	logger.Info("API client initialized", zap.String("url", cfg.API.URL))
-
-	// 5. Initialize caches
-	statusCache, err := cache.NewStatusCache(cfg.Cache.StatusCacheLRUSize, cfg.Cache.StatusCacheTTL)
-	if err != nil {
-		logger.Error("failed to initialize status cache", zap.Error(err))
-		return fmt.Errorf("failed to initialize status cache: %w", err)
-	}
-	logger.Info("Status cache initialized",
-		zap.Int("size", cfg.Cache.StatusCacheLRUSize),
-		zap.Duration("ttl", cfg.Cache.StatusCacheTTL),
-	)
-
-	// 6. Create server
 	srv = server.NewServer(cfg, logger)
-	
-	// Create DNS validator wrapper
+
 	dnsValidator := &DNSValidatorAdapter{}
 	srv.SetDNSValidator(dnsValidator)
 	srv.SetAPIClient(apiClient)
 	srv.SetStatusCache(statusCache)
-	srv.SetIPFSFetcher(ipfs.NewFetcher(node, logger))
 
-	// Log rate limiting configuration if enabled
+	gateway, err := gw.NewGateway(node.BlockService, node.DHT, apiClient, statusCache, logger)
+	if err != nil {
+		logger.Error("failed to initialize gateway", zap.Error(err))
+		return fmt.Errorf("failed to initialize gateway: %w", err)
+	}
+	srv.SetGateway(gateway)
+	logger.Info("Gateway handler initialized")
+
+	healthChecker := health.NewChecker(apiClient, node)
+	srv.SetHealthChecker(healthChecker)
+	logger.Info("Health checker initialized")
+
 	if cfg.RateLimit.Enabled {
 		logger.Info("Rate limiting enabled",
 			zap.Float64("rate", cfg.RateLimit.Rate),
@@ -148,21 +164,13 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		)
 	}
 
-	// Initialize routes after all dependencies are set
 	srv.InitializeRoutes()
 
-	// 7. Setup health checker
-	healthChecker := health.NewChecker(apiClient, node)
-	srv.SetHealthChecker(healthChecker)
-	logger.Info("Health checker initialized")
-
-	// 8. Setup graceful shutdown
 	setupGracefulShutdown(ctx)
 
-	// 9. Start server
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	logger.Info("server starting", zap.String("addr", addr))
-	if err := srv.Start(addr); err != nil {
+	if err := srv.Start(addr); err != nil && err != http.ErrServerClosed {
 		logger.Error("server failed", zap.Error(err))
 		return fmt.Errorf("server failed: %w", err)
 	}
@@ -190,11 +198,35 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 		zapConfig.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
 	}
 
+	if cfg.Logging.Level == "debug" {
+		subsystems := []string{
+			"boxo/gateway",
+			"boxo/gateway/blockstore",
+			"blockservice",
+			"bitswap",
+			"bitswap/client",
+			"bitswap/client/getter",
+			"bitswap/session",
+			"bitswap/bsnet",
+			"routing/provqrymgr",
+			"blockstore",
+			"path/resolver",
+			"unixfs",
+			"namesys",
+			"ipns",
+			"dht",
+			"providers",
+		}
+		for _, s := range subsystems {
+			_ = ipfslog.SetLogLevel(s, "debug")
+		}
+	}
+
 	return zapConfig.Build()
 }
 
-func initIPFSNode(ctx context.Context, cfg *config.Config, logger *zap.Logger) (*ipfs.Node, error) {
-	return ipfs.NewNode(ctx, cfg.IPFS.SeedPeer, cfg.IPFS.RepoPath, logger)
+func initIPFSNode(ctx context.Context, cfg *config.Config, bs *cache.ContentBlockstore, logger *zap.Logger) (*ipfs.Node, error) {
+	return ipfs.NewNode(ctx, cfg.IPFS.SeedPeer, bs, logger)
 }
 
 func setupGracefulShutdown(ctx context.Context) {
