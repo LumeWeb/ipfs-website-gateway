@@ -2,6 +2,7 @@ package namesys
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -10,6 +11,11 @@ import (
 	"github.com/ipfs/boxo/path"
 	ci "github.com/libp2p/go-libp2p/core/crypto"
 	"go.uber.org/zap"
+)
+
+var (
+	errStaleExpired = errors.New("stale IPNS cache entry expired")
+	errNoResult     = errors.New("no IPNS resolution result")
 )
 
 type staleEntry struct {
@@ -60,21 +66,40 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 }
 
 func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) <-chan namesys.AsyncResult {
-	result, err := s.inner.Resolve(ctx, p, opts...)
+	innerCh := s.inner.ResolveAsync(ctx, p, opts...)
 	ch := make(chan namesys.AsyncResult, 1)
-	if err == nil {
-		s.store.PutStale(p.String(), staleEntry{result: result, cachedAt: time.Now()})
-		ch <- namesys.AsyncResult{Path: result.Path, TTL: result.TTL, LastMod: result.LastMod}
+
+	var best namesys.AsyncResult
+	hadResult := false
+
+	for res := range innerCh {
+		if res.Err != nil {
+			continue
+		}
+		best = res
+		hadResult = true
+	}
+
+	if hadResult {
+		s.store.PutStale(p.String(), staleEntry{
+			result: namesys.Result{
+				Path:    best.Path,
+				TTL:     best.TTL,
+				LastMod: best.LastMod,
+			},
+			cachedAt: time.Now(),
+		})
+		ch <- best
 	} else if se, ok := s.store.GetStale(p.String()); ok {
 		if time.Since(se.cachedAt) < s.store.staleTTL {
 			s.revalidate(p, opts)
 			ch <- namesys.AsyncResult{Path: se.result.Path, TTL: se.result.TTL, LastMod: se.result.LastMod}
 		} else {
 			s.store.DeleteStale(p.String())
-			ch <- namesys.AsyncResult{Err: err}
+			ch <- namesys.AsyncResult{Err: errStaleExpired}
 		}
 	} else {
-		ch <- namesys.AsyncResult{Err: err}
+		ch <- namesys.AsyncResult{Err: errNoResult}
 	}
 	close(ch)
 	return ch

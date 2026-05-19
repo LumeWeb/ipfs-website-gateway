@@ -88,6 +88,7 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 
 	backend, err := gateway.NewBlocksBackend(bs, gateway.WithNameSystem(wrappedNameSystem))
 	if err != nil {
+		wrappedNameSystem.Stop()
 		return nil, err
 	}
 
