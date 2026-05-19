@@ -144,11 +144,12 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	srv.SetAPIClient(apiClient)
 	srv.SetStatusCache(statusCache)
 
-	gateway, err := gw.NewGateway(node.BlockService, apiClient, statusCache, logger, cfg.IPFS.RetrievalTimeout, node.Routing, cfg.Cache.IPNSCacheLRUSize, cfg.Cache.IPNSCacheMaxTTL)
+	gateway, err := gw.NewGateway(node.BlockService, apiClient, statusCache, logger, cfg.IPFS.RetrievalTimeout, node.Routing, cfg.Cache.IPNSCacheLRUSize, cfg.Cache.IPNSCacheMaxTTL, cfg.Cache.IPNSCachePath)
 	if err != nil {
 		logger.Error("failed to initialize gateway", zap.Error(err))
 		return fmt.Errorf("failed to initialize gateway: %w", err)
 	}
+	defer gateway.Close()
 	srv.SetGateway(gateway)
 	logger.Info("Gateway handler initialized")
 
