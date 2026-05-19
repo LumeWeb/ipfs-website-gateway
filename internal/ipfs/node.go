@@ -145,6 +145,14 @@ func (n *Node) Close() error {
 		n.cancel()
 	}
 
+	if n.Routing != nil {
+		if closer, ok := n.Routing.(io.Closer); ok {
+			if err := closer.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("failed to close routing: %w", err))
+			}
+		}
+	}
+
 	if n.Host != nil {
 		if err := n.Host.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to close host: %w", err))

@@ -2,6 +2,7 @@ package ipfs
 
 import (
 	"context"
+	"io"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -50,3 +51,9 @@ func (s *seedPeerRouting) SearchValue(ctx context.Context, key string, opts ...r
 
 	return s.dht.SearchValue(ctx, key, opts...)
 }
+
+func (s *seedPeerRouting) Close() error {
+	return s.dht.Close()
+}
+
+var _ io.Closer = (*seedPeerRouting)(nil)
