@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	_ "embed"
 	"html/template"
@@ -250,7 +251,6 @@ func stripPort(hostname string) string {
 
 func (m *AccessControlMiddleware) renderPendingPage(w http.ResponseWriter, domain string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
 
 	data := ErrorPageData{
 		Title:           "Awaiting Validation",
@@ -258,15 +258,18 @@ func (m *AccessControlMiddleware) renderPendingPage(w http.ResponseWriter, domai
 		ContentTemplate: "pending_content",
 	}
 
-	if err := m.templates.ExecuteTemplate(w, "base", data); err != nil {
+	var buf bytes.Buffer
+	if err := m.templates.ExecuteTemplate(&buf, "base", data); err != nil {
 		m.logger.Error("failed to render pending template", zap.Error(err))
 		http.Error(w, "not found", http.StatusNotFound)
+		return
 	}
+	w.WriteHeader(http.StatusOK)
+	buf.WriteTo(w)
 }
 
 func (m *AccessControlMiddleware) renderInvalidPage(w http.ResponseWriter, statusCode int, domain, statusText, explanation, reasons string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(statusCode)
 
 	data := ErrorPageData{
 		Title:           "Site Unavailable",
@@ -277,8 +280,12 @@ func (m *AccessControlMiddleware) renderInvalidPage(w http.ResponseWriter, statu
 		ContentTemplate: "invalid_content",
 	}
 
-	if err := m.templates.ExecuteTemplate(w, "base", data); err != nil {
+	var buf bytes.Buffer
+	if err := m.templates.ExecuteTemplate(&buf, "base", data); err != nil {
 		m.logger.Error("failed to render invalid template", zap.Error(err))
 		http.Error(w, "not found", http.StatusNotFound)
+		return
 	}
+	w.WriteHeader(statusCode)
+	buf.WriteTo(w)
 }
