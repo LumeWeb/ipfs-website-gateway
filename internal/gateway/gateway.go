@@ -15,6 +15,7 @@ import (
 	"github.com/ipfs/boxo/gateway"
 	"github.com/ipfs/boxo/namesys"
 	"github.com/ipfs/boxo/path"
+	"github.com/libp2p/go-libp2p/core/routing"
 	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
@@ -49,13 +50,25 @@ type Gateway struct {
 	statusCache *cache.StatusCache
 }
 
-func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration) (*Gateway, error) {
+func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsMaxTTL time.Duration) (*Gateway, error) {
 	ns, err := gateway.NewDNSResolver(nil, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	nameSystem, err := namesys.NewNameSystem(routinghelpers.Null{}, namesys.WithDNSResolver(ns))
+	if valueStore == nil {
+		valueStore = routinghelpers.Null{}
+	}
+
+	namesysOpts := []namesys.Option{namesys.WithDNSResolver(ns)}
+	if ipnsCacheSize > 0 {
+		namesysOpts = append(namesysOpts, namesys.WithCache(ipnsCacheSize))
+	}
+	if ipnsMaxTTL > 0 {
+		namesysOpts = append(namesysOpts, namesys.WithMaxCacheTTL(ipnsMaxTTL))
+	}
+
+	nameSystem, err := namesys.NewNameSystem(valueStore, namesysOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -265,9 +278,24 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 		}
 
 		originalPath := r.URL.Path
-		r.URL.Path = "/ipns/" + domain + r.URL.Path
+		switch website.TargetType {
+		case "ipfs":
+			r.URL.Path = "/ipfs/" + website.TargetHash + r.URL.Path
+		case "ipns":
+			r.URL.Path = "/ipns/" + website.TargetHash + r.URL.Path
+		default:
+			m.logger.Error("unknown target type",
+				zap.String("domain", domain),
+				zap.String("target_type", website.TargetType),
+			)
+			m.renderInvalidPage(w, http.StatusNotFound, domain, "Configuration Error",
+				"This website has an invalid configuration.",
+				"The target type is not recognized. Please contact support.")
+			return
+		}
 		m.logger.Debug("rewriting path for active domain",
 			zap.String("domain", domain),
+			zap.String("target_type", website.TargetType),
 			zap.String("original_path", originalPath),
 			zap.String("rewritten_path", r.URL.Path),
 		)

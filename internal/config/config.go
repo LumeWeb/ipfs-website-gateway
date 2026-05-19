@@ -44,6 +44,8 @@ type CacheConfig struct {
 	ContentCachePath     string        `config:"content_cache_path"`
 	ContentCacheMaxBytes int64         `config:"content_cache_max_bytes"`
 	ContentCacheLRUSize  int           `config:"content_cache_lru_size"`
+	IPNSCacheLRUSize     int           `config:"ipns_cache_lru_size"`
+	IPNSCacheMaxTTL      time.Duration `config:"ipns_cache_max_ttl"`
 }
 
 // LoggingConfig holds logging configuration settings.
@@ -118,6 +120,8 @@ func (c CacheConfig) Defaults() map[string]any {
 		"ContentCachePath":     "/tmp/ipfs-cache",
 		"ContentCacheMaxBytes": int64(10) * 1024 * 1024 * 1024, // 10 GB
 		"ContentCacheLRUSize":  100000,
+		"IPNSCacheLRUSize":     128,
+		"IPNSCacheMaxTTL":      1 * time.Minute,
 	}
 }
 
@@ -129,6 +133,8 @@ func (c CacheConfig) Schema() zog.ZogSchema {
 		"ContentCachePath":     zog.String().Optional(),
 		"ContentCacheMaxBytes": zog.Int64().GT(0).Optional(),
 		"ContentCacheLRUSize":  zog.Int().GT(0).Optional(),
+		"IPNSCacheLRUSize":     zog.Int().GT(0).Optional(),
+		"IPNSCacheMaxTTL":      zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 	})
 }
 

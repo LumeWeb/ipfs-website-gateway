@@ -15,6 +15,7 @@ import (
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/routing"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
@@ -23,6 +24,7 @@ import (
 type Node struct {
 	Host         host.Host
 	BlockService blockservice.BlockService
+	Routing      routing.ValueStore
 	ctx          context.Context
 	cancel       context.CancelFunc
 	logger       *zap.Logger
@@ -55,9 +57,27 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 
 	node.BlockService = blockservice.New(bs, bswapInstance)
 
+	var seedID peer.ID
 	if seedPeer != "" {
-		if err := node.connectToSeedPeer(nodeCtx, seedPeer, connectTimeout); err != nil {
-			logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
+		peerInfo, err := resolveSeedPeer(nodeCtx, seedPeer, connectTimeout)
+		if err != nil {
+			logger.Warn("failed to resolve seed peer", zap.String("peer", seedPeer), zap.Error(err))
+		} else {
+			seedID = peerInfo.ID
+			if err := node.Host.Connect(nodeCtx, *peerInfo); err != nil {
+				logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
+			} else {
+				logger.Info("connected to seed peer", zap.String("peer_id", peerInfo.ID.String()))
+			}
+		}
+	}
+
+	if len(seedID) > 0 {
+		spr, err := newSeedPeerRouting(nodeCtx, host, seedID)
+		if err != nil {
+			logger.Warn("failed to initialize seed peer routing", zap.Error(err))
+		} else {
+			node.Routing = spr
 		}
 	}
 
@@ -114,23 +134,6 @@ func resolveSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration
 	}
 
 	return peerInfo, nil
-}
-
-func (n *Node) connectToSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration) error {
-	peerInfo, err := resolveSeedPeer(ctx, seedPeer, timeout)
-	if err != nil {
-		return err
-	}
-
-	if err := n.Host.Connect(ctx, *peerInfo); err != nil {
-		return fmt.Errorf("failed to connect to peer %s: %w", peerInfo.ID, err)
-	}
-
-	n.logger.Info("connected to seed peer",
-		zap.String("peer_id", peerInfo.ID.String()),
-	)
-
-	return nil
 }
 
 func (n *Node) Close() error {

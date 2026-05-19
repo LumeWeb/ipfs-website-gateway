@@ -218,8 +218,10 @@ func TestAccessControlMiddleware_ActiveDomain(t *testing.T) {
 	apiClient := &mockAPIClient{
 		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
 			return &types.GatewayWebsiteResponse{
-				Domain: "example.com",
-				Status: types.StatusActive,
+				Domain:     "example.com",
+				Status:     types.StatusActive,
+				TargetHash: "QmTest",
+				TargetType: "ipfs",
 			}, nil
 		},
 	}
@@ -230,8 +232,8 @@ func TestAccessControlMiddleware_ActiveDomain(t *testing.T) {
 	}
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/ipns/example.com/" {
-			t.Errorf("expected path /ipns/example.com/, got %s", r.URL.Path)
+		if r.URL.Path != "/ipfs/QmTest/" {
+			t.Errorf("expected path /ipfs/QmTest/, got %s", r.URL.Path)
 		}
 		w.WriteHeader(http.StatusOK)
 	})
@@ -488,10 +490,12 @@ func TestAccessControlMiddleware_XForwardedHost(t *testing.T) {
 			if domain != "behind-proxy.com" {
 				t.Errorf("expected domain behind-proxy.com, got %s", domain)
 			}
-			return &types.GatewayWebsiteResponse{
-				Domain: "behind-proxy.com",
-				Status: types.StatusActive,
-			}, nil
+		return &types.GatewayWebsiteResponse{
+			Domain:     "behind-proxy.com",
+			Status:     types.StatusActive,
+			TargetHash: "QmProxy",
+			TargetType: "ipfs",
+		}, nil
 		},
 	}
 
@@ -526,8 +530,10 @@ func TestAccessControlMiddleware_PathRewrite(t *testing.T) {
 	apiClient := &mockAPIClient{
 		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
 			return &types.GatewayWebsiteResponse{
-				Domain: "example.com",
-				Status: types.StatusActive,
+				Domain:     "example.com",
+				Status:     types.StatusActive,
+				TargetHash: "QmTest",
+				TargetType: "ipfs",
 			}, nil
 		},
 	}
@@ -555,8 +561,48 @@ func TestAccessControlMiddleware_PathRewrite(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if receivedPath != "/ipns/example.com/assets/style.css" {
-		t.Errorf("expected /ipns/example.com/assets/style.css, got %s", receivedPath)
+	if receivedPath != "/ipfs/QmTest/assets/style.css" {
+		t.Errorf("expected /ipfs/QmTest/assets/style.css, got %s", receivedPath)
+	}
+}
+
+func TestAccessControlMiddleware_PathRewriteIPNS(t *testing.T) {
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return &types.GatewayWebsiteResponse{
+				Domain:     "example.com",
+				Status:     types.StatusActive,
+				TargetHash: "k51qzi5uqu5djuc7yel4lzixq3e6ifsm0n1v0lrug8g9o18n4r0v2bgfjlkekm",
+				TargetType: "ipns",
+			}, nil
+		},
+	}
+
+	gw, err := newTestGateway(apiClient, nil)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	var receivedPath string
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
+	handler := middleware.Wrap(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/assets/style.css", nil)
+	req.Host = "example.com"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if receivedPath != "/ipns/k51qzi5uqu5djuc7yel4lzixq3e6ifsm0n1v0lrug8g9o18n4r0v2bgfjlkekm/assets/style.css" {
+		t.Errorf("expected /ipns/k51qzi.../assets/style.css, got %s", receivedPath)
 	}
 }
 
