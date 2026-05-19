@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}} | Pinner</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg viewBox='0 0 373 373' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M45.9695 213.883C20.9759 188.89 20.9759 148.367 45.9695 123.374L78.4392 90.9038C89.3635 79.9796 107.075 79.9796 117.999 90.9039V90.9039C128.924 101.828 128.924 119.54 117.999 130.464L108.867 139.597C92.8983 155.565 92.8983 181.455 108.867 197.423L224.149 312.705C235.106 323.662 235.106 341.427 224.149 352.384V352.384C213.192 363.341 195.427 363.341 184.47 352.384L45.9695 213.883Z' fill='%23ADF0DD'/%3E%3Cpath d='M253.686 85.7724C278.68 110.766 278.68 151.288 253.686 176.282L218.76 211.208C209.362 220.606 194.124 220.606 184.726 211.208V211.208C175.327 201.81 175.327 186.572 184.726 177.173L196.53 165.369C212.448 149.45 212.448 123.642 196.53 107.724L148.851 60.045C137.929 49.1225 137.929 31.4137 148.851 20.4912V20.4912C159.774 9.56872 177.483 9.56872 188.405 20.4912L253.686 85.7724Z' fill='%23BFEEDE'/%3E%3C/svg%3E" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: "Poppins", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: #0d1d1c;
+            color: #f8f8f8;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 600px;
+            text-align: center;
+        }
+
+        .logo {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 2rem;
+        }
+
+        .logo svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 500;
+            margin-bottom: 1rem;
+            color: #f8f8f8;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 1.5rem;
+        }
+
+        .status-badge.pending {
+            background-color: #0d2d2a;
+            color: #adf0dd;
+            border: 1px solid #75ac9e;
+        }
+
+        .status-badge.error {
+            background-color: rgba(255, 102, 71, 0.1);
+            color: #ff6647;
+            border: 1px solid #ff6647;
+        }
+
+        .status-icon {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-badge.pending .status-icon {
+            background-color: #adf0dd;
+        }
+
+        .status-badge.error .status-icon {
+            background-color: #ff6647;
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        p {
+            font-size: 1.125rem;
+            color: #bdc2c1;
+            margin-bottom: 1.5rem;
+        }
+
+        .domain {
+            font-family: monospace;
+            background-color: #051413;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            color: #adf0dd;
+            word-break: break-all;
+        }
+
+        .info-box {
+            background-color: #0d2d2a;
+            border: 1px solid #75ac9e;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin: 2rem 0;
+            text-align: left;
+        }
+
+        .info-box h3 {
+            color: #adf0dd;
+            font-size: 1rem;
+            font-weight: 500;
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .info-box p {
+            font-size: 0.9375rem;
+            margin-bottom: 0;
+            color: #bdc2c1;
+        }
+
+        .actions {
+            margin-top: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s ease;
+            cursor: pointer;
+            border: none;
+        }
+
+        .btn-primary {
+            background-color: #f3c614;
+            color: #0d1d1c;
+        }
+
+        .btn-primary:hover {
+            background-color: #f7d94c;
+        }
+
+        .btn-secondary {
+            background-color: transparent;
+            color: #adf0dd;
+            border: 1px solid #75ac9e;
+        }
+
+        .btn-secondary:hover {
+            background-color: rgba(173, 240, 221, 0.1);
+        }
+
+        .footer {
+            margin-top: 3rem;
+            font-size: 0.875rem;
+            color: #75ac9e;
+        }
+
+        .footer a {
+            color: #adf0dd;
+            text-decoration: none;
+        }
+
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        @media (max-width: 640px) {
+            h1 {
+                font-size: 1.875rem;
+            }
+
+            p {
+                font-size: 1rem;
+            }
+
+            .logo {
+                width: 64px;
+                height: 64px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <svg viewBox="0 0 373 373" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M45.9695 213.883C20.9759 188.89 20.9759 148.367 45.9695 123.374L78.4392 90.9038C89.3635 79.9796 107.075 79.9796 117.999 90.9039V90.9039C128.924 101.828 128.924 119.54 117.999 130.464L108.867 139.597C92.8983 155.565 92.8983 181.455 108.867 197.423L224.149 312.705C235.106 323.662 235.106 341.427 224.149 352.384V352.384C213.192 363.341 195.427 363.341 184.47 352.384L45.9695 213.883Z" fill="#ADF0DD"/>
+                <path d="M253.686 85.7724C278.68 110.766 278.68 151.288 253.686 176.282L218.76 211.208C209.362 220.606 194.124 220.606 184.726 211.208V211.208C175.327 201.81 175.327 186.572 184.726 177.173L196.53 165.369C212.448 149.45 212.448 123.642 196.53 107.724L148.851 60.045C137.929 49.1225 137.929 31.4137 148.851 20.4912V20.4912C159.774 9.56872 177.483 9.56872 188.405 20.4912L253.686 85.7724Z" fill="#BFEEDE"/>
+            </svg>
+        </div>
+
+        {{if eq .ContentTemplate "pending_content"}}
+            {{template "pending_content" .}}
+        {{else}}
+            {{template "invalid_content" .}}
+        {{end}}
+
+        <div class="footer">
+            <p>Powered by <a href="https://pinner.xyz" target="_blank" rel="noopener">Pinner</a> &bull; <a href="https://lumeweb.com" target="_blank" rel="noopener">Lume Web</a></p>
+        </div>
+    </div>
+</body>
+</html>

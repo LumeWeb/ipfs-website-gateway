@@ -234,7 +234,10 @@ func TestAccessControlMiddleware_ActiveDomain(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := NewAccessControlMiddleware(gw, zap.NewNop())
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
 	handler := middleware.Wrap(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -267,7 +270,10 @@ func TestAccessControlMiddleware_BrokenDomain(t *testing.T) {
 		t.Error("inner handler should not be called for broken domain")
 	})
 
-	middleware := NewAccessControlMiddleware(gw, zap.NewNop())
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
 	handler := middleware.Wrap(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -297,7 +303,10 @@ func TestAccessControlMiddleware_DeniedDomain(t *testing.T) {
 		t.Error("inner handler should not be called for denied domain")
 	})
 
-	middleware := NewAccessControlMiddleware(gw, zap.NewNop())
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
 	handler := middleware.Wrap(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -323,7 +332,10 @@ func TestAccessControlMiddleware_IPAddressPassThrough(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := NewAccessControlMiddleware(gw, zap.NewNop())
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
 	handler := middleware.Wrap(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -352,7 +364,10 @@ func TestAccessControlMiddleware_IpfSPrefixURLPassThrough(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := NewAccessControlMiddleware(gw, zap.NewNop())
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
 	handler := middleware.Wrap(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/ipfs/QmTest", nil)
@@ -388,7 +403,10 @@ func TestAccessControlMiddleware_XForwardedHost(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := NewAccessControlMiddleware(gw, zap.NewNop())
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
 	handler := middleware.Wrap(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -424,7 +442,10 @@ func TestAccessControlMiddleware_PathRewrite(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	middleware := NewAccessControlMiddleware(gw, zap.NewNop())
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
 	handler := middleware.Wrap(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/assets/style.css", nil)
@@ -457,7 +478,10 @@ func TestAccessControlMiddleware_PendingValidationStatus(t *testing.T) {
 		t.Error("inner handler should not be called for pending domain")
 	})
 
-	middleware := NewAccessControlMiddleware(gw, zap.NewNop())
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
 	handler := middleware.Wrap(inner)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -466,8 +490,9 @@ func TestAccessControlMiddleware_PendingValidationStatus(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusNotFound {
-		t.Errorf("expected 404 for pending_validation, got %d", rec.Code)
+	// Pending validation now returns 200 with a custom HTML page explaining the status
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for pending_validation with custom page, got %d", rec.Code)
 	}
 }
 
