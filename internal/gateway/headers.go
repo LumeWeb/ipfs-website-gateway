@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
+	"path"
 	"strings"
 
 	gwheaders "github.com/tj/go-headers"
@@ -144,8 +144,8 @@ func ApplyDefaultSecurityHeaders(w http.ResponseWriter) {
 }
 
 func matchPath(pattern, requestPath string) bool {
-	pattern = filepath.Clean("/" + pattern)
-	requestPath = filepath.Clean("/" + requestPath)
+	pattern = path.Clean("/" + pattern)
+	requestPath = path.Clean("/" + requestPath)
 
 	if pattern == requestPath {
 		return true
@@ -159,7 +159,7 @@ func matchPath(pattern, requestPath string) bool {
 	}
 
 	if strings.Contains(pattern, "*") {
-		matched, _ := filepath.Match(pattern, requestPath)
+		matched, _ := path.Match(pattern, requestPath)
 		return matched
 	}
 
