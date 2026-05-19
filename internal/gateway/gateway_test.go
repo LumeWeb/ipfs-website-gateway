@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
+	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
 )
@@ -199,13 +201,13 @@ func TestCheckAccess_CacheInvalid(t *testing.T) {
 	if !result.Hit {
 		t.Fatal("invalid domain should be cached")
 	}
-	if result.Entry != nil && result.Entry.Response != nil {
-		t.Fatal("cached entry for invalid domain should have nil response")
+	if result.Entry.Err == nil {
+		t.Fatal("cached entry for invalid domain should have error")
 	}
 
 	website, err := gw.CheckAccess(context.Background(), "invalid.com")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
+	if err == nil {
+		t.Fatal("cached error should be replayed on second call")
 	}
 	if website != nil {
 		t.Fatal("cached invalid domain should return nil website")
@@ -311,6 +313,105 @@ func TestAccessControlMiddleware_DeniedDomain(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "denied.com"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestAccessControlMiddleware_ErrNotFound(t *testing.T) {
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return nil, fmt.Errorf("%w: website not found", ipfs.ErrNotFound)
+		},
+	}
+
+	gw, err := newTestGateway(apiClient, nil)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("inner handler should not be called for not found domain")
+	})
+
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
+	handler := middleware.Wrap(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "notfound.com"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
+func TestAccessControlMiddleware_ErrGone(t *testing.T) {
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return nil, fmt.Errorf("%w: website gone", ipfs.ErrGone)
+		},
+	}
+
+	gw, err := newTestGateway(apiClient, nil)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("inner handler should not be called for gone domain")
+	})
+
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
+	handler := middleware.Wrap(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "gone.com"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGone {
+		t.Errorf("expected 410, got %d", rec.Code)
+	}
+}
+
+func TestAccessControlMiddleware_ErrUnauthorized(t *testing.T) {
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return nil, fmt.Errorf("%w: authentication required", ipfs.ErrUnauthorized)
+		},
+	}
+
+	gw, err := newTestGateway(apiClient, nil)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("inner handler should not be called for unauthorized domain")
+	})
+
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
+	handler := middleware.Wrap(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Host = "unauthorized.com"
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

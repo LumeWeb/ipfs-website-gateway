@@ -81,3 +81,16 @@ func (sc *StatusCache) Set(domain string, response *types.GatewayWebsiteResponse
 func (sc *StatusCache) SetInvalid(domain string) {
 	sc.Set(domain, nil)
 }
+
+// SetError caches an error result for the specified domain.
+// The error is preserved so that discriminated error handling (e.g. ErrNotFound vs ErrGone)
+// works consistently across cache hits and misses.
+func (sc *StatusCache) SetError(domain string, err error) {
+	now := time.Now()
+	entry := &types.CacheEntry{
+		Err:       err,
+		CachedAt:  now,
+		ExpiresAt: now.Add(sc.ttl),
+	}
+	sc.cache.Add(domain, entry)
+}

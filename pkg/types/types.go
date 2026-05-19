@@ -16,6 +16,7 @@ type GatewayWebsiteResponse = ipfs.GatewayWebsiteResponse
 
 type CacheEntry struct {
 	Response  *ipfs.GatewayWebsiteResponse
+	Err       error
 	CachedAt  time.Time
 	ExpiresAt time.Time
 }

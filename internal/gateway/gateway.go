@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"errors"
 	"html/template"
 	"net"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
+	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
 )
@@ -92,11 +94,11 @@ func (g *Gateway) Backend() *gateway.BlocksBackend {
 func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
 	if g.statusCache != nil {
 		result := g.statusCache.Get(domain)
-		if result.Hit && !result.Expired && result.Entry != nil && result.Entry.Response != nil {
+		if result.Hit && !result.Expired && result.Entry != nil {
+			if result.Entry.Err != nil {
+				return nil, result.Entry.Err
+			}
 			return result.Entry.Response, nil
-		}
-		if result.Hit && !result.Expired && result.Entry != nil && result.Entry.Response == nil {
-			return nil, nil
 		}
 	}
 
@@ -111,7 +113,7 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.Gatewa
 			zap.Error(err),
 		)
 		if g.statusCache != nil {
-			g.statusCache.SetInvalid(domain)
+			g.statusCache.SetError(domain, err)
 		}
 		return nil, err
 	}
@@ -138,7 +140,6 @@ type AccessControlMiddleware struct {
 }
 
 func NewAccessControlMiddleware(gw *Gateway, logger *zap.Logger) (*AccessControlMiddleware, error) {
-	// Parse all templates together - they define named blocks
 	tmpl, err := template.New("base").Parse(baseTemplate + pendingTemplate + invalidTemplate)
 	if err != nil {
 		return nil, err
@@ -184,6 +185,39 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 
 		website, err := m.gateway.CheckAccess(ctx, domain)
 		if err != nil {
+			if errors.Is(err, ipfs.ErrNotFound) {
+				m.logger.Debug("domain not found on platform",
+					zap.String("domain", domain),
+					zap.Error(err),
+				)
+				m.renderInvalidPage(w, http.StatusNotFound, domain, "Not On Platform",
+					"This website is not hosted on Pinner.",
+					"This domain has not been registered on the Pinner network. If you believe this is an error, please check your DNS configuration or register your domain at pinner.xyz.")
+				return
+			}
+
+			if errors.Is(err, ipfs.ErrGone) {
+				m.logger.Debug("domain gone",
+					zap.String("domain", domain),
+					zap.Error(err),
+				)
+				m.renderInvalidPage(w, http.StatusGone, domain, "Website Unavailable",
+					"This website has been marked as broken or removed from the Pinner network.",
+					"The content may be inaccessible, the target hash may be invalid, or the website may have been taken down by the owner.")
+				return
+			}
+
+			if errors.Is(err, ipfs.ErrUnauthorized) {
+				m.logger.Debug("access denied for domain",
+					zap.String("domain", domain),
+					zap.Error(err),
+				)
+				m.renderInvalidPage(w, http.StatusNotFound, domain, "Access Error",
+					"Unable to verify this domain at this time.",
+					"We're experiencing technical difficulties checking this domain's status. Please try again later or contact support if the problem persists.")
+				return
+			}
+
 			m.logger.Debug("access check failed for domain",
 				zap.String("domain", domain),
 				zap.Error(err),

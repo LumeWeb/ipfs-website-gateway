@@ -33,7 +33,7 @@ func (m *mockWebsitesService) Update(ctx context.Context, id string, domain stri
 	return nil, nil
 }
 
-func (m *mockWebsitesService) UpdateWithOptions(ctx context.Context, id string, req ipfs.WebsiteRequest) (*ipfs.WebsiteResponse, error) {
+func (m *mockWebsitesService) UpdateWithOptions(ctx context.Context, id string, req ipfs.WebsiteUpdateRequest) (*ipfs.WebsiteResponse, error) {
 	return nil, nil
 }
 
