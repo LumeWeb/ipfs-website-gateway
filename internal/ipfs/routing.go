@@ -2,6 +2,7 @@ package ipfs
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	dht "github.com/libp2p/go-libp2p-kad-dht"
@@ -28,6 +29,13 @@ func newSeedPeerRouting(ctx context.Context, h host.Host, seedID peer.ID) (*seed
 		dht:    d,
 		seedID: seedID,
 	}, nil
+}
+
+func (s *seedPeerRouting) Bootstrap(ctx context.Context) error {
+	if err := s.dht.Bootstrap(ctx); err != nil {
+		return fmt.Errorf("failed to bootstrap DHT client: %w", err)
+	}
+	return nil
 }
 
 func (s *seedPeerRouting) PutValue(ctx context.Context, key string, value []byte, opts ...routing.Option) error {
