@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	boxogateway "github.com/ipfs/boxo/gateway"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	ipfs "go.lumeweb.com/ipfs-sdk"
@@ -584,8 +585,10 @@ func TestAccessControlMiddleware_PathRewriteIPNS(t *testing.T) {
 	}
 
 	var receivedPath string
+	var receivedCtx context.Context
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedPath = r.URL.Path
+		receivedCtx = r.Context()
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -603,6 +606,14 @@ func TestAccessControlMiddleware_PathRewriteIPNS(t *testing.T) {
 
 	if receivedPath != "/ipns/k51qzi5uqu5djuc7yel4lzixq3e6ifsm0n1v0lrug8g9o18n4r0v2bgfjlkekm/assets/style.css" {
 		t.Errorf("expected /ipns/k51qzi.../assets/style.css, got %s", receivedPath)
+	}
+
+	dnslinkHost, ok := receivedCtx.Value(boxogateway.DNSLinkHostnameKey).(string)
+	if !ok {
+		t.Error("expected DNSLinkHostnameKey to be set in context")
+	}
+	if dnslinkHost != "example.com" {
+		t.Errorf("expected DNSLinkHostnameKey to be 'example.com', got %s", dnslinkHost)
 	}
 }
 
