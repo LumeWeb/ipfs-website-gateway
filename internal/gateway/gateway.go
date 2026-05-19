@@ -293,6 +293,9 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 				"The target type is not recognized. Please contact support.")
 			return
 		}
+		ctx = context.WithValue(ctx, gateway.DNSLinkHostnameKey, domain)
+		r = r.WithContext(ctx)
+
 		m.logger.Debug("rewriting path for active domain",
 			zap.String("domain", domain),
 			zap.String("target_type", website.TargetType),
