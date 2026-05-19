@@ -77,6 +77,9 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 		if err != nil {
 			logger.Warn("failed to initialize seed peer routing", zap.Error(err))
 		} else {
+			if err := spr.Bootstrap(nodeCtx); err != nil {
+				logger.Warn("failed to bootstrap DHT client", zap.Error(err))
+			}
 			node.Routing = spr
 		}
 	}
