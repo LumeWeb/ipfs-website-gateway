@@ -20,6 +20,7 @@ import (
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	ipfs "go.lumeweb.com/ipfs-sdk"
+	stalenamesys "go.lumeweb.com/ipfs-website-gateway/internal/namesys"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
 )
@@ -48,9 +49,10 @@ type Gateway struct {
 	logger      *zap.Logger
 	api         api.APIClient
 	statusCache *cache.StatusCache
+	nameSys     *stalenamesys.StaleWhileRevalidateNameSystem
 }
 
-func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsMaxTTL time.Duration) (*Gateway, error) {
+func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsMaxTTL time.Duration, ipnsCachePath string) (*Gateway, error) {
 	ns, err := gateway.NewDNSResolver(nil, nil)
 	if err != nil {
 		return nil, err
@@ -60,7 +62,15 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 		valueStore = routinghelpers.Null{}
 	}
 
-	namesysOpts := []namesys.Option{namesys.WithDNSResolver(ns)}
+	ipnsStore, err := stalenamesys.NewIPNSStore(ipnsCachePath, ipnsMaxTTL, retrievalTimeout, ipnsCacheSize, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	namesysOpts := []namesys.Option{
+		namesys.WithDNSResolver(ns),
+		namesys.WithDatastore(ipnsStore.Datastore()),
+	}
 	if ipnsCacheSize > 0 {
 		namesysOpts = append(namesysOpts, namesys.WithCache(ipnsCacheSize))
 	}
@@ -70,10 +80,13 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 
 	nameSystem, err := namesys.NewNameSystem(valueStore, namesysOpts...)
 	if err != nil {
+		ipnsStore.Close()
 		return nil, err
 	}
 
-	backend, err := gateway.NewBlocksBackend(bs, gateway.WithNameSystem(nameSystem))
+	wrappedNameSystem := stalenamesys.NewStaleWhileRevalidateNameSystem(nameSystem, ipnsStore, 4, logger)
+
+	backend, err := gateway.NewBlocksBackend(bs, gateway.WithNameSystem(wrappedNameSystem))
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +106,14 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 		logger:      logger,
 		api:         apiClient,
 		statusCache: statusCache,
+		nameSys:     wrappedNameSystem,
 	}, nil
+}
+
+func (g *Gateway) Close() {
+	if g.nameSys != nil {
+		g.nameSys.Stop()
+	}
 }
 
 func (g *Gateway) Handler() http.Handler {
