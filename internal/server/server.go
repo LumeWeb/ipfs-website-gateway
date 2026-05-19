@@ -119,7 +119,10 @@ func (s *Server) setupRoutes(e *echo.Echo) {
 
 	if s.gateway != nil {
 		gatewayHandler := s.gateway.Handler()
-		accessControl := gw.NewAccessControlMiddleware(s.gateway, s.logger)
+		accessControl, err := gw.NewAccessControlMiddleware(s.gateway, s.logger)
+		if err != nil {
+			s.logger.Fatal("failed to create access control middleware", zap.Error(err))
+		}
 		wrappedHandler := accessControl.Wrap(gatewayHandler)
 
 		e.Any("/*", echo.WrapHandler(wrappedHandler))

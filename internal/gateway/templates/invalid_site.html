@@ -1,0 +1,36 @@
+{{define "invalid_content"}}
+<h1>Site Unavailable</h1>
+
+<div class="status-badge error">
+    <span class="status-icon"></span>
+    {{.StatusText}}
+</div>
+
+<p>The website <span class="domain">{{.Domain}}</span> is currently unavailable or cannot be found on the Pinner network.</p>
+
+<div class="info-box">
+    <h3>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 16v-4M12 8h.01"/>
+        </svg>
+        Why am I seeing this?
+    </h3>
+    <p>{{.Explanation}}</p>
+</div>
+
+<div class="info-box">
+    <h3>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2"/>
+        </svg>
+        Possible reasons
+    </h3>
+    <p>{{.Reasons}}</p>
+</div>
+
+<div class="actions">
+    <a href="https://pinner.xyz" class="btn btn-primary">Go to Pinner</a>
+    <a href="https://pinner.xyz/contact" class="btn btn-secondary">Contact Support</a>
+</div>
+{{end}}

@@ -1,7 +1,10 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
+	_ "embed"
+	"html/template"
 	"net"
 	"net/http"
 	"strings"
@@ -17,6 +20,24 @@ import (
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
 )
+
+//go:embed templates/base.html
+var baseTemplate string
+
+//go:embed templates/pending_validation.html
+var pendingTemplate string
+
+//go:embed templates/invalid_site.html
+var invalidTemplate string
+
+type ErrorPageData struct {
+	Title           string
+	Domain          string
+	StatusText      string
+	Explanation     string
+	Reasons         string
+	ContentTemplate string
+}
 
 type Gateway struct {
 	backend     *gateway.BlocksBackend
@@ -111,12 +132,23 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type AccessControlMiddleware struct {
-	gateway *Gateway
-	logger  *zap.Logger
+	gateway   *Gateway
+	logger    *zap.Logger
+	templates *template.Template
 }
 
-func NewAccessControlMiddleware(gw *Gateway, logger *zap.Logger) *AccessControlMiddleware {
-	return &AccessControlMiddleware{gateway: gw, logger: logger}
+func NewAccessControlMiddleware(gw *Gateway, logger *zap.Logger) (*AccessControlMiddleware, error) {
+	// Parse all templates together - they define named blocks
+	tmpl, err := template.New("base").Parse(baseTemplate + pendingTemplate + invalidTemplate)
+	if err != nil {
+		return nil, err
+	}
+
+	return &AccessControlMiddleware{
+		gateway:   gw,
+		logger:    logger,
+		templates: tmpl,
+	}, nil
 }
 
 func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
@@ -152,23 +184,38 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 
 		website, err := m.gateway.CheckAccess(ctx, domain)
 		if err != nil {
-			m.logger.Debug("access denied for domain",
+			m.logger.Debug("access check failed for domain",
 				zap.String("domain", domain),
 				zap.Error(err),
 			)
-			http.Error(w, "not found", http.StatusNotFound)
+			m.renderInvalidPage(w, http.StatusNotFound, domain, "Access Error",
+				"Unable to verify this domain at this time.",
+				"We're experiencing technical difficulties checking this domain's status. Please try again later or contact support if the problem persists.")
 			return
 		}
 
 		if website == nil {
 			m.logger.Debug("domain not found", zap.String("domain", domain))
-			http.Error(w, "not found", http.StatusNotFound)
+			m.renderInvalidPage(w, http.StatusNotFound, domain, "Not On Platform",
+				"This website is not hosted on Pinner.",
+				"This domain has not been registered on the Pinner network. If you believe this is an error, please check your DNS configuration or register your domain at pinner.xyz.")
 			return
 		}
 
 		if website.Status == types.StatusBroken {
 			m.logger.Debug("domain broken", zap.String("domain", domain))
-			http.Error(w, "gone", http.StatusGone)
+			m.renderInvalidPage(w, http.StatusGone, domain, "Website Unavailable",
+				"This website has been marked as broken or removed from the Pinner network.",
+				"The content may be inaccessible, the target hash may be invalid, or the website may have been taken down by the owner.")
+			return
+		}
+
+		if website.Status == types.StatusPendingValidation {
+			m.logger.Debug("domain pending validation",
+				zap.String("domain", domain),
+				zap.String("status", string(website.Status)),
+			)
+			m.renderPendingPage(w, domain)
 			return
 		}
 
@@ -177,7 +224,9 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 				zap.String("domain", domain),
 				zap.String("status", string(website.Status)),
 			)
-			http.Error(w, "not found", http.StatusNotFound)
+			m.renderInvalidPage(w, http.StatusNotFound, domain, "Website Inactive",
+				"This website is currently inactive.",
+				"The website may be awaiting validation, suspended, or temporarily disabled.")
 			return
 		}
 
@@ -198,4 +247,45 @@ func stripPort(hostname string) string {
 		return host
 	}
 	return hostname
+}
+
+func (m *AccessControlMiddleware) renderPendingPage(w http.ResponseWriter, domain string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	data := ErrorPageData{
+		Title:           "Awaiting Validation",
+		Domain:          domain,
+		ContentTemplate: "pending_content",
+	}
+
+	var buf bytes.Buffer
+	if err := m.templates.ExecuteTemplate(&buf, "base", data); err != nil {
+		m.logger.Error("failed to render pending template", zap.Error(err))
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	buf.WriteTo(w)
+}
+
+func (m *AccessControlMiddleware) renderInvalidPage(w http.ResponseWriter, statusCode int, domain, statusText, explanation, reasons string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	data := ErrorPageData{
+		Title:           "Site Unavailable",
+		Domain:          domain,
+		StatusText:      statusText,
+		Explanation:     explanation,
+		Reasons:         reasons,
+		ContentTemplate: "invalid_content",
+	}
+
+	var buf bytes.Buffer
+	if err := m.templates.ExecuteTemplate(&buf, "base", data); err != nil {
+		m.logger.Error("failed to render invalid template", zap.Error(err))
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(statusCode)
+	buf.WriteTo(w)
 }
