@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 
 	gwheaders "github.com/tj/go-headers"
@@ -41,14 +42,19 @@ var BlockedHeaders = map[string]bool{
 	"cache-control":            true,
 }
 
+type pathRule struct {
+	pattern string
+	headers http.Header
+}
+
 type HeadersMiddleware struct {
-	rules  map[string]http.Header
+	rules  []pathRule
 	logger *zap.Logger
 }
 
 func NewHeadersMiddleware(logger *zap.Logger) *HeadersMiddleware {
 	return &HeadersMiddleware{
-		rules:  make(map[string]http.Header),
+		rules:  make([]pathRule, 0),
 		logger: logger,
 	}
 }
@@ -58,6 +64,8 @@ func (h *HeadersMiddleware) Parse(r io.Reader) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse %s file: %w", HeadersFilename, err)
 	}
+
+	var parsed []pathRule
 
 	for pathPattern, headerSet := range rules {
 		filtered := make(http.Header)
@@ -97,9 +105,15 @@ func (h *HeadersMiddleware) Parse(r io.Reader) error {
 		}
 
 		if len(filtered) > 0 {
-			h.rules[pathPattern] = filtered
+			parsed = append(parsed, pathRule{pattern: pathPattern, headers: filtered})
 		}
 	}
+
+	sort.Slice(parsed, func(i, j int) bool {
+		return len(parsed[i].pattern) < len(parsed[j].pattern)
+	})
+
+	h.rules = parsed
 
 	return nil
 }
@@ -116,9 +130,9 @@ func (h *HeadersMiddleware) ApplyHeaders(w http.ResponseWriter, requestPath stri
 		w.Header().Set(key, value)
 	}
 
-	for pattern, headerSet := range h.rules {
-		if matchPath(pattern, requestPath) {
-			for key, values := range headerSet {
+	for _, rule := range h.rules {
+		if matchPath(rule.pattern, requestPath) {
+			for key, values := range rule.headers {
 				if _, hardcoded := HardcodedSecurityHeaders[key]; hardcoded {
 					h.logger.Debug("user header skipped (would override hardcoded)",
 						zap.String("header", key))
