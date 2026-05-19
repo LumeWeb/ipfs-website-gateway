@@ -94,11 +94,11 @@ func (g *Gateway) Backend() *gateway.BlocksBackend {
 func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
 	if g.statusCache != nil {
 		result := g.statusCache.Get(domain)
-		if result.Hit && !result.Expired && result.Entry != nil && result.Entry.Response != nil {
+		if result.Hit && !result.Expired && result.Entry != nil {
+			if result.Entry.Err != nil {
+				return nil, result.Entry.Err
+			}
 			return result.Entry.Response, nil
-		}
-		if result.Hit && !result.Expired && result.Entry != nil && result.Entry.Response == nil {
-			return nil, nil
 		}
 	}
 
@@ -113,7 +113,7 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.Gatewa
 			zap.Error(err),
 		)
 		if g.statusCache != nil {
-			g.statusCache.SetInvalid(domain)
+			g.statusCache.SetError(domain, err)
 		}
 		return nil, err
 	}

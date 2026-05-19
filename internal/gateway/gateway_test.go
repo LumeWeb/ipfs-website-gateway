@@ -201,13 +201,13 @@ func TestCheckAccess_CacheInvalid(t *testing.T) {
 	if !result.Hit {
 		t.Fatal("invalid domain should be cached")
 	}
-	if result.Entry != nil && result.Entry.Response != nil {
-		t.Fatal("cached entry for invalid domain should have nil response")
+	if result.Entry.Err == nil {
+		t.Fatal("cached entry for invalid domain should have error")
 	}
 
 	website, err := gw.CheckAccess(context.Background(), "invalid.com")
-	if err != nil {
-		t.Fatalf("second call: %v", err)
+	if err == nil {
+		t.Fatal("cached error should be replayed on second call")
 	}
 	if website != nil {
 		t.Fatal("cached invalid domain should return nil website")
