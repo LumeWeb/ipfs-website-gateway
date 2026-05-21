@@ -80,7 +80,7 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 
 	nameSystem, err := namesys.NewNameSystem(valueStore, namesysOpts...)
 	if err != nil {
-		ipnsStore.Close()
+		_ = ipnsStore.Close()
 		return nil, err
 	}
 
@@ -351,7 +351,7 @@ func (m *AccessControlMiddleware) renderPendingPage(w http.ResponseWriter, domai
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	buf.WriteTo(w)
+	_, _ = buf.WriteTo(w)
 }
 
 func (m *AccessControlMiddleware) renderInvalidPage(w http.ResponseWriter, statusCode int, domain, statusText, explanation, reasons string) {
@@ -373,5 +373,5 @@ func (m *AccessControlMiddleware) renderInvalidPage(w http.ResponseWriter, statu
 		return
 	}
 	w.WriteHeader(statusCode)
-	buf.WriteTo(w)
+	_, _ = buf.WriteTo(w)
 }

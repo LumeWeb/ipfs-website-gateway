@@ -57,7 +57,7 @@ func NewIPNSStore(cachePath string, staleTTL time.Duration, timeout time.Duratio
 
 	staleCache, err := lru.New[string, staleEntry](maxSize)
 	if err != nil {
-		ldb.Close()
+		_ = ldb.Close()
 		return nil, err
 	}
 
@@ -87,7 +87,7 @@ func (s *IPNSStore) loadStaleFromDisk(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer results.Close()
+	defer func() { _ = results.Close() }()
 
 	now := time.Now()
 	loaded := 0
@@ -110,7 +110,7 @@ func (s *IPNSStore) loadStaleFromDisk(ctx context.Context) error {
 
 		cachedAt := time.Unix(0, pe.CachedAt)
 		if now.Sub(cachedAt) > s.staleTTL {
-			s.staleDS.Delete(ctx, ds.NewKey(entry.Key))
+			_ = s.staleDS.Delete(ctx, ds.NewKey(entry.Key))
 			expired++
 			continue
 		}

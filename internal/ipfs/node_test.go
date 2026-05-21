@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
+	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
@@ -190,6 +191,157 @@ func TestConnectedPeersAfterClose(t *testing.T) {
 	peers := node.ConnectedPeers()
 	if len(peers) != 0 {
 		t.Errorf("Expected no connected peers after close, got %d", len(peers))
+	}
+}
+
+func TestNewNodeWithSeedPeerRoutingSet(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	seedPeer := "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+
+	node, err := NewNode(ctx, seedPeer, 30*time.Second, bs, logger)
+	if err != nil {
+		t.Fatalf("NewNode with seed peer failed: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+
+	if node.Routing == nil {
+		t.Error("Routing should not be nil")
+	}
+
+	_, isNull := node.routing.current.(routinghelpers.Null)
+	if isNull {
+		t.Error("Routing should not be Null when seed peer connects successfully")
+	}
+
+	node.seedPeerRetry.mu.Lock()
+	retryRunning := node.seedPeerRetry.running
+	node.seedPeerRetry.mu.Unlock()
+	if retryRunning {
+		t.Error("Seed peer retry should not be running when seed peer connected successfully")
+	}
+}
+
+func TestNewNodeWithUnreachableSeedPeer(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	seedPeer := "/ip4/192.0.2.1/tcp/4001/p2p/12D3KooWRBYMhRRPFnEasFnLiSnEC8YWFC5wpFcFfb6V3V33Wmqr"
+
+	node, err := NewNode(ctx, seedPeer, 1*time.Second, bs, logger)
+	if err != nil {
+		t.Fatalf("NewNode should not fail with unreachable seed peer: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+
+	_, isNull := node.routing.current.(routinghelpers.Null)
+	if !isNull {
+		t.Error("Routing should be Null when seed peer connection fails")
+	}
+
+	node.seedPeerRetry.mu.Lock()
+	retryRunning := node.seedPeerRetry.running
+	retryPeer := node.seedPeerRetry.peer
+	node.seedPeerRetry.mu.Unlock()
+
+	if !retryRunning {
+		t.Error("Seed peer retry should be running when seed peer connection fails")
+	}
+	if retryPeer != seedPeer {
+		t.Errorf("Retry peer = %q, want %q", retryPeer, seedPeer)
+	}
+}
+
+func TestNewNodeNoSeedPeerNoRetry(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+	if err != nil {
+		t.Fatalf("NewNode failed: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+
+	_, isNull := node.routing.current.(routinghelpers.Null)
+	if !isNull {
+		t.Error("Routing should be Null when no seed peer is configured")
+	}
+
+	node.seedPeerRetry.mu.Lock()
+	retryRunning := node.seedPeerRetry.running
+	node.seedPeerRetry.mu.Unlock()
+
+	if retryRunning {
+		t.Error("Seed peer retry should not be running when no seed peer is configured")
+	}
+}
+
+func TestSeedPeerRetryStopsOnClose(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	seedPeer := "/ip4/192.0.2.1/tcp/4001/p2p/12D3KooWRBYMhRRPFnEasFnLiSnEC8YWFC5wpFcFfb6V3V33Wmqr"
+
+	node, err := NewNode(ctx, seedPeer, 1*time.Second, bs, logger)
+	if err != nil {
+		t.Fatalf("NewNode failed: %v", err)
+	}
+
+	node.seedPeerRetry.mu.Lock()
+	wasRunning := node.seedPeerRetry.running
+	stopCh := node.seedPeerRetry.stopCh
+	node.seedPeerRetry.mu.Unlock()
+
+	if !wasRunning {
+		t.Fatal("Expected retry to be running before close")
+	}
+
+	if err := node.Close(); err != nil {
+		t.Errorf("Close failed: %v", err)
+	}
+
+	select {
+	case <-stopCh:
+	default:
+		t.Error("Stop channel should be closed after node.Close()")
+	}
+
+	node.seedPeerRetry.mu.Lock()
+	stillRunning := node.seedPeerRetry.running
+	node.seedPeerRetry.mu.Unlock()
+
+	if stillRunning {
+		t.Error("Seed peer retry should not be running after close")
+	}
+}
+
+func TestSeedPeerRetrySucceeds(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	seedPeer := "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
+
+	node, err := NewNode(ctx, seedPeer, 30*time.Second, bs, logger)
+	if err != nil {
+		t.Fatalf("NewNode failed: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+
+	_, isNull := node.routing.current.(routinghelpers.Null)
+	if isNull {
+		t.Error("Routing should not be Null after successful seed peer connection")
+	}
+
+	select {
+	case <-node.ctx.Done():
+		t.Error("Node context should not be done")
+	default:
 	}
 }
 
