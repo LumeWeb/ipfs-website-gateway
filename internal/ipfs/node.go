@@ -17,6 +17,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/routing"
+	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
@@ -26,6 +27,7 @@ type Node struct {
 	Host         host.Host
 	BlockService blockservice.BlockService
 	Routing      routing.ValueStore
+	routing      *routingProxy
 	ctx          context.Context
 	cancel       context.CancelFunc
 	logger       *zap.Logger
@@ -39,6 +41,40 @@ type Node struct {
 	}
 }
 
+type routingProxy struct {
+	mu      sync.RWMutex
+	current routing.ValueStore
+}
+
+var _ routing.ValueStore = (*routingProxy)(nil)
+
+func (p *routingProxy) PutValue(ctx context.Context, key string, value []byte, opts ...routing.Option) error {
+	p.mu.RLock()
+	vs := p.current
+	p.mu.RUnlock()
+	return vs.PutValue(ctx, key, value, opts...)
+}
+
+func (p *routingProxy) GetValue(ctx context.Context, key string, opts ...routing.Option) ([]byte, error) {
+	p.mu.RLock()
+	vs := p.current
+	p.mu.RUnlock()
+	return vs.GetValue(ctx, key, opts...)
+}
+
+func (p *routingProxy) SearchValue(ctx context.Context, key string, opts ...routing.Option) (<-chan []byte, error) {
+	p.mu.RLock()
+	vs := p.current
+	p.mu.RUnlock()
+	return vs.SearchValue(ctx, key, opts...)
+}
+
+func (p *routingProxy) swap(vs routing.ValueStore) {
+	p.mu.Lock()
+	p.current = vs
+	p.mu.Unlock()
+}
+
 func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, bs blockstore.Blockstore, logger *zap.Logger) (*Node, error) {
 	if bs == nil {
 		return nil, fmt.Errorf("blockstore cannot be nil")
@@ -47,10 +83,12 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 	nodeCtx, cancel := context.WithCancel(ctx)
 
 	node := &Node{
-		ctx:    nodeCtx,
-		cancel: cancel,
-		logger: logger,
+		ctx:     nodeCtx,
+		cancel:  cancel,
+		logger:  logger,
+		routing: &routingProxy{current: routinghelpers.Null{}},
 	}
+	node.Routing = node.routing
 
 	host, err := node.initHost(nodeCtx)
 	if err != nil {
@@ -89,7 +127,7 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 			if err := spr.Bootstrap(nodeCtx); err != nil {
 				logger.Warn("failed to bootstrap DHT client", zap.Error(err))
 			}
-			node.Routing = spr
+			node.routing.swap(spr)
 		}
 	}
 
@@ -203,7 +241,7 @@ func (n *Node) retrySeedPeerLoop() {
 			}
 
 			n.seedPeerRetry.mu.Lock()
-			n.Routing = spr
+			n.routing.swap(spr)
 			n.seedPeerRetry.running = false
 			n.seedPeerRetry.mu.Unlock()
 
@@ -233,8 +271,12 @@ func (n *Node) Close() error {
 		n.cancel()
 	}
 
-	if n.Routing != nil {
-		if closer, ok := n.Routing.(io.Closer); ok {
+	n.routing.mu.RLock()
+	routing := n.routing.current
+	n.routing.mu.RUnlock()
+
+	if routing != nil {
+		if closer, ok := routing.(io.Closer); ok {
 			if err := closer.Close(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to close routing: %w", err))
 			}

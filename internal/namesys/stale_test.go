@@ -64,7 +64,7 @@ func newTestStore(t *testing.T) *IPNSStore {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return store
 }
 
@@ -129,7 +129,7 @@ func TestResolve_StaleExpired_ReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
 
@@ -285,13 +285,13 @@ func TestIPNSStore_PersistsAcrossRestart(t *testing.T) {
 		result:   namesys.Result{Path: p, TTL: time.Minute},
 		cachedAt: time.Now(),
 	})
-	store1.Close()
+	_ = store1.Close()
 
 	store2, err := NewIPNSStore(dir, 5*time.Minute, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store2.Close()
+	defer func() { _ = store2.Close() }()
 
 	got, ok := store2.GetStale("/ipns/example.com")
 	if !ok {
@@ -315,13 +315,13 @@ func TestIPNSStore_ExpiredEntriesPrunedOnLoad(t *testing.T) {
 		result:   namesys.Result{Path: p},
 		cachedAt: time.Now().Add(-time.Hour),
 	})
-	store1.Close()
+	_ = store1.Close()
 
 	store2, err := NewIPNSStore(dir, 1*time.Nanosecond, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store2.Close()
+	defer func() { _ = store2.Close() }()
 
 	_, ok := store2.GetStale("/ipns/example.com")
 	if ok {
@@ -334,7 +334,7 @@ func TestIPNSStore_LRUEviction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	defer func() { _ = store.Close() }()
 
 	for i := 0; i < 5; i++ {
 		p := newPath(t, "/ipns/example.com")

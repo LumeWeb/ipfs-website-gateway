@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
+	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 )
@@ -207,7 +208,12 @@ func TestNewNodeWithSeedPeerRoutingSet(t *testing.T) {
 	defer func() { _ = node.Close() }()
 
 	if node.Routing == nil {
-		t.Error("Routing should be set when seed peer connects successfully")
+		t.Error("Routing should not be nil")
+	}
+
+	_, isNull := node.routing.current.(routinghelpers.Null)
+	if isNull {
+		t.Error("Routing should not be Null when seed peer connects successfully")
 	}
 
 	node.seedPeerRetry.mu.Lock()
@@ -231,8 +237,9 @@ func TestNewNodeWithUnreachableSeedPeer(t *testing.T) {
 	}
 	defer func() { _ = node.Close() }()
 
-	if node.Routing != nil {
-		t.Error("Routing should be nil when seed peer connection fails")
+	_, isNull := node.routing.current.(routinghelpers.Null)
+	if !isNull {
+		t.Error("Routing should be Null when seed peer connection fails")
 	}
 
 	node.seedPeerRetry.mu.Lock()
@@ -259,8 +266,9 @@ func TestNewNodeNoSeedPeerNoRetry(t *testing.T) {
 	}
 	defer func() { _ = node.Close() }()
 
-	if node.Routing != nil {
-		t.Error("Routing should be nil when no seed peer is configured")
+	_, isNull := node.routing.current.(routinghelpers.Null)
+	if !isNull {
+		t.Error("Routing should be Null when no seed peer is configured")
 	}
 
 	node.seedPeerRetry.mu.Lock()
@@ -325,8 +333,9 @@ func TestSeedPeerRetrySucceeds(t *testing.T) {
 	}
 	defer func() { _ = node.Close() }()
 
-	if node.Routing == nil {
-		t.Error("Routing should be set after successful seed peer connection")
+	_, isNull := node.routing.current.(routinghelpers.Null)
+	if isNull {
+		t.Error("Routing should not be Null after successful seed peer connection")
 	}
 
 	select {

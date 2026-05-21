@@ -111,7 +111,7 @@ func (s *StaleWhileRevalidateNameSystem) Publish(ctx context.Context, sk ci.Priv
 
 func (s *StaleWhileRevalidateNameSystem) Stop() {
 	s.pool.StopWait()
-	s.store.Close()
+	_ = s.store.Close()
 }
 
 func (s *StaleWhileRevalidateNameSystem) revalidate(p path.Path, opts []namesys.ResolveOption) {
