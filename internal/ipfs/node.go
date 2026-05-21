@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ipfs/boxo/bitswap"
@@ -28,6 +29,14 @@ type Node struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	logger       *zap.Logger
+
+	seedPeerRetry struct {
+		mu       sync.Mutex
+		stopCh   chan struct{}
+		running  bool
+		peer     string
+		timeout  time.Duration
+	}
 }
 
 func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, bs blockstore.Blockstore, logger *zap.Logger) (*Node, error) {
@@ -57,23 +66,23 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 
 	node.BlockService = blockservice.New(bs, bswapInstance)
 
-	var seedID peer.ID
+	var connected bool
 	if seedPeer != "" {
 		peerInfo, err := resolveSeedPeer(nodeCtx, seedPeer, connectTimeout)
 		if err != nil {
 			logger.Warn("failed to resolve seed peer", zap.String("peer", seedPeer), zap.Error(err))
 		} else {
-			seedID = peerInfo.ID
 			if err := node.Host.Connect(nodeCtx, *peerInfo); err != nil {
 				logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
 			} else {
 				logger.Info("connected to seed peer", zap.String("peer_id", peerInfo.ID.String()))
+				connected = true
 			}
 		}
 	}
 
-	if len(seedID) > 0 {
-		spr, err := newSeedPeerRouting(nodeCtx, host, seedID)
+	if connected {
+		spr, err := newSeedPeerRouting(nodeCtx, host)
 		if err != nil {
 			logger.Warn("failed to initialize seed peer routing", zap.Error(err))
 		} else {
@@ -82,6 +91,10 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 			}
 			node.Routing = spr
 		}
+	}
+
+	if seedPeer != "" && !connected {
+		node.startSeedPeerRetry(seedPeer, connectTimeout)
 	}
 
 	logger.Info("IPFS node initialized",
@@ -139,8 +152,80 @@ func resolveSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration
 	return peerInfo, nil
 }
 
+func (n *Node) startSeedPeerRetry(peer string, timeout time.Duration) {
+	n.seedPeerRetry.mu.Lock()
+	defer n.seedPeerRetry.mu.Unlock()
+
+	if n.seedPeerRetry.running {
+		return
+	}
+
+	n.seedPeerRetry.running = true
+	n.seedPeerRetry.peer = peer
+	n.seedPeerRetry.timeout = timeout
+	n.seedPeerRetry.stopCh = make(chan struct{})
+
+	go n.retrySeedPeerLoop()
+}
+
+func (n *Node) retrySeedPeerLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-n.seedPeerRetry.stopCh:
+			return
+		case <-ticker.C:
+			peerInfo, err := resolveSeedPeer(n.ctx, n.seedPeerRetry.peer, n.seedPeerRetry.timeout)
+			if err != nil {
+				n.logger.Debug("seed peer retry: failed to resolve", zap.String("peer", n.seedPeerRetry.peer), zap.Error(err))
+				continue
+			}
+
+			if err := n.Host.Connect(n.ctx, *peerInfo); err != nil {
+				n.logger.Debug("seed peer retry: failed to connect", zap.String("peer", n.seedPeerRetry.peer), zap.Error(err))
+				continue
+			}
+
+			n.logger.Info("seed peer retry: connected", zap.String("peer_id", peerInfo.ID.String()))
+
+			spr, err := newSeedPeerRouting(n.ctx, n.Host)
+			if err != nil {
+				n.logger.Warn("seed peer retry: failed to initialize routing", zap.Error(err))
+				continue
+			}
+
+			if err := spr.Bootstrap(n.ctx); err != nil {
+				n.logger.Warn("seed peer retry: failed to bootstrap DHT", zap.Error(err))
+			}
+
+			n.seedPeerRetry.mu.Lock()
+			n.Routing = spr
+			n.seedPeerRetry.running = false
+			n.seedPeerRetry.mu.Unlock()
+
+			return
+		}
+	}
+}
+
+func (n *Node) stopSeedPeerRetry() {
+	n.seedPeerRetry.mu.Lock()
+	defer n.seedPeerRetry.mu.Unlock()
+
+	if n.seedPeerRetry.running && n.seedPeerRetry.stopCh != nil {
+		close(n.seedPeerRetry.stopCh)
+		n.seedPeerRetry.running = false
+	}
+}
+
 func (n *Node) Close() error {
 	n.logger.Info("shutting down IPFS node")
+
+	n.stopSeedPeerRetry()
 
 	var errs []error
 
