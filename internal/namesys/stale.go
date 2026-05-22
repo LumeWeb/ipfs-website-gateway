@@ -44,64 +44,158 @@ func NewStaleWhileRevalidateNameSystem(inner namesys.NameSystem, store *IPNSStor
 }
 
 func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
-	result, err := s.inner.Resolve(ctx, p, opts...)
-	if err == nil {
-		s.store.PutStale(p.String(), staleEntry{result: result, cachedAt: time.Now()})
-		return result, nil
+	type resolveOutcome struct {
+		result namesys.Result
+		err    error
 	}
 
-	if se, ok := s.store.GetStale(p.String()); ok {
-		if time.Since(se.cachedAt) < s.store.staleTTL {
-			s.logger.Debug("serving stale namesys entry while revalidating",
+	resolveCh := make(chan resolveOutcome, 1)
+	go func() {
+		result, err := s.inner.Resolve(ctx, p, opts...)
+		resolveCh <- resolveOutcome{result: result, err: err}
+	}()
+
+	timeout := s.store.timeout
+	select {
+	case outcome := <-resolveCh:
+		if outcome.err == nil {
+			s.store.PutStale(p.String(), staleEntry{result: outcome.result, cachedAt: time.Now()})
+			s.logger.Debug("ipns resolve succeeded (fresh)",
+				zap.String("path", p.String()),
+				zap.Duration("ttl", outcome.result.TTL),
+			)
+			return outcome.result, nil
+		}
+
+		s.logger.Debug("ipns resolve failed, checking stale cache",
+			zap.String("path", p.String()),
+			zap.Error(outcome.err),
+		)
+
+		if se, ok := s.store.GetStale(p.String()); ok {
+			if time.Since(se.cachedAt) < s.store.staleTTL {
+				s.logger.Debug("serving stale ipns entry while revalidating",
+					zap.String("path", p.String()),
+					zap.Duration("age", time.Since(se.cachedAt)),
+				)
+				s.revalidate(p, opts)
+				return se.result, nil
+			}
+			s.logger.Debug("stale ipns entry expired, evicting",
+				zap.String("path", p.String()),
+				zap.Duration("age", time.Since(se.cachedAt)),
+				zap.Duration("stale_ttl", s.store.staleTTL),
+			)
+			s.store.DeleteStale(p.String())
+		}
+
+		s.logger.Debug("ipns resolve failed, no stale fallback available",
+			zap.String("path", p.String()),
+			zap.Error(outcome.err),
+		)
+
+		return namesys.Result{}, outcome.err
+
+	case <-time.After(timeout):
+		s.logger.Debug("ipns resolve timed out, checking stale cache",
+			zap.String("path", p.String()),
+			zap.Duration("timeout", timeout),
+		)
+
+		if se, ok := s.store.GetStale(p.String()); ok {
+			if time.Since(se.cachedAt) < s.store.staleTTL {
+				s.logger.Debug("serving stale ipns entry after timeout",
+					zap.String("path", p.String()),
+					zap.Duration("age", time.Since(se.cachedAt)),
+				)
+				s.revalidate(p, opts)
+				return se.result, nil
+			}
+			s.logger.Debug("stale ipns entry expired after timeout, evicting",
 				zap.String("path", p.String()),
 				zap.Duration("age", time.Since(se.cachedAt)),
 			)
-			s.revalidate(p, opts)
-			return se.result, nil
+			s.store.DeleteStale(p.String())
 		}
-		s.store.DeleteStale(p.String())
-	}
 
-	return namesys.Result{}, err
+		s.logger.Debug("ipns resolve timed out, no stale fallback available",
+			zap.String("path", p.String()),
+			zap.Duration("timeout", timeout),
+		)
+
+		return namesys.Result{}, context.DeadlineExceeded
+	}
 }
 
 func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) <-chan namesys.AsyncResult {
-	innerCh := s.inner.ResolveAsync(ctx, p, opts...)
+	resolveCtx, cancel := context.WithTimeout(ctx, s.store.timeout)
+
+	innerCh := s.inner.ResolveAsync(resolveCtx, p, opts...)
 	ch := make(chan namesys.AsyncResult, 1)
 
 	var best namesys.AsyncResult
+	var lastErr error
 	hadResult := false
 
-	for res := range innerCh {
-		if res.Err != nil {
-			continue
-		}
-		best = res
-		hadResult = true
-	}
+	go func() {
+		defer close(ch)
+		defer cancel()
 
-	if hadResult {
-		s.store.PutStale(p.String(), staleEntry{
-			result: namesys.Result{
-				Path:    best.Path,
-				TTL:     best.TTL,
-				LastMod: best.LastMod,
-			},
-			cachedAt: time.Now(),
-		})
-		ch <- best
-	} else if se, ok := s.store.GetStale(p.String()); ok {
-		if time.Since(se.cachedAt) < s.store.staleTTL {
-			s.revalidate(p, opts)
-			ch <- namesys.AsyncResult{Path: se.result.Path, TTL: se.result.TTL, LastMod: se.result.LastMod}
-		} else {
-			s.store.DeleteStale(p.String())
-			ch <- namesys.AsyncResult{Err: errStaleExpired}
+		for res := range innerCh {
+			if res.Err != nil {
+				lastErr = res.Err
+				continue
+			}
+			best = res
+			hadResult = true
 		}
-	} else {
-		ch <- namesys.AsyncResult{Err: errNoResult}
-	}
-	close(ch)
+
+		if hadResult {
+			s.store.PutStale(p.String(), staleEntry{
+				result: namesys.Result{
+					Path:    best.Path,
+					TTL:     best.TTL,
+					LastMod: best.LastMod,
+				},
+				cachedAt: time.Now(),
+			})
+			s.logger.Debug("ipns async resolve succeeded (fresh)",
+				zap.String("path", p.String()),
+			)
+			ch <- best
+		} else if se, ok := s.store.GetStale(p.String()); ok {
+			if time.Since(se.cachedAt) < s.store.staleTTL {
+				s.logger.Debug("serving stale ipns async entry while revalidating",
+					zap.String("path", p.String()),
+					zap.Duration("age", time.Since(se.cachedAt)),
+				)
+				s.revalidate(p, opts)
+				ch <- namesys.AsyncResult{Path: se.result.Path, TTL: se.result.TTL, LastMod: se.result.LastMod}
+			} else {
+				s.logger.Debug("stale ipns async entry expired, evicting",
+					zap.String("path", p.String()),
+					zap.Duration("age", time.Since(se.cachedAt)),
+				)
+				s.store.DeleteStale(p.String())
+				if lastErr != nil {
+					ch <- namesys.AsyncResult{Err: lastErr}
+				} else {
+					ch <- namesys.AsyncResult{Err: errStaleExpired}
+				}
+			}
+		} else {
+			s.logger.Debug("ipns async resolve failed, no stale fallback available",
+				zap.String("path", p.String()),
+				zap.Error(lastErr),
+			)
+			if lastErr != nil {
+				ch <- namesys.AsyncResult{Err: lastErr}
+			} else {
+				ch <- namesys.AsyncResult{Err: errNoResult}
+			}
+		}
+	}()
+
 	return ch
 }
 

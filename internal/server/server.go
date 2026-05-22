@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 
@@ -148,6 +149,13 @@ func (s *Server) allowedHandler(c echo.Context) error {
 	)
 
 	if domain == "" {
+		return c.NoContent(http.StatusBadRequest)
+	}
+
+	if net.ParseIP(domain) != nil {
+		s.logger.Debug("rejecting IP address in /allowed endpoint",
+			zap.String("domain", domain),
+		)
 		return c.NoContent(http.StatusBadRequest)
 	}
 
