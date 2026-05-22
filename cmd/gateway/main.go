@@ -92,7 +92,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		zap.Int("port", cfg.Server.Port),
 	)
 
-	statusCache, err := cache.NewStatusCache(cfg.Cache.StatusCacheLRUSize, cfg.Cache.StatusCacheTTL)
+	statusCache, err := cache.NewStatusCache(cfg.Cache.StatusCacheLRUSize, cfg.Cache.StatusCacheTTL, cfg.Cache.StatusCacheShortTTL)
 	if err != nil {
 		logger.Error("failed to initialize status cache", zap.Error(err))
 		return fmt.Errorf("failed to initialize status cache: %w", err)
@@ -100,6 +100,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	logger.Info("Status cache initialized",
 		zap.Int("size", cfg.Cache.StatusCacheLRUSize),
 		zap.Duration("ttl", cfg.Cache.StatusCacheTTL),
+		zap.Duration("short_ttl", cfg.Cache.StatusCacheShortTTL),
 	)
 
 	apiClient, err := api.NewClient(cfg.API.URL, cfg.API.Secret, cfg.API.Timeout)

@@ -160,13 +160,23 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.Gatewa
 			zap.Error(err),
 		)
 		if g.statusCache != nil {
-			g.statusCache.SetError(domain, err)
+			if errors.Is(err, ipfs.ErrGone) {
+				g.statusCache.SetErrorShortTTL(domain, err)
+			} else {
+				g.statusCache.SetError(domain, err)
+			}
 		}
 		return nil, err
 	}
 
 	if g.statusCache != nil {
-		g.statusCache.Set(domain, website)
+		if website != nil && website.Status == types.StatusPendingValidation {
+			g.statusCache.SetShortTTL(domain, website)
+		} else if website != nil && website.Status == types.StatusBroken {
+			g.statusCache.SetShortTTL(domain, website)
+		} else {
+			g.statusCache.Set(domain, website)
+		}
 	}
 
 	return website, nil

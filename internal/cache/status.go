@@ -12,8 +12,30 @@ import (
 // It caches both positive and negative results (nil responses) to provide DoS protection
 // and performance optimization.
 type StatusCache struct {
-	cache *lru.Cache[string, *types.CacheEntry]
-	ttl   time.Duration
+	cache    *lru.Cache[string, *types.CacheEntry]
+	ttl      time.Duration
+	shortTTL time.Duration
+}
+
+func NewStatusCache(size int, ttl time.Duration, shortTTL time.Duration) (*StatusCache, error) {
+	if size <= 0 {
+		return nil, errors.New("cache size must be positive")
+	}
+
+	if ttl <= 0 {
+		return nil, errors.New("cache TTL must be positive")
+	}
+
+	if shortTTL <= 0 {
+		return nil, errors.New("cache short TTL must be positive")
+	}
+
+	cache, err := lru.New[string, *types.CacheEntry](size)
+	if err != nil {
+		return nil, err
+	}
+
+	return &StatusCache{cache: cache, ttl: ttl, shortTTL: shortTTL}, nil
 }
 
 // NewStatusCache creates a new StatusCache with the specified size and TTL.
@@ -23,30 +45,6 @@ type StatusCache struct {
 // The ttl parameter specifies how long cache entries remain valid. Expired entries
 // are automatically detected and evicted on access.
 //
-// Returns an error if size or ttl are not positive values.
-func NewStatusCache(size int, ttl time.Duration) (*StatusCache, error) {
-	if size <= 0 {
-		return nil, errors.New("cache size must be positive")
-	}
-
-	if ttl <= 0 {
-		return nil, errors.New("cache TTL must be positive")
-	}
-
-	cache, err := lru.New[string, *types.CacheEntry](size)
-	if err != nil {
-		return nil, err
-	}
-
-	return &StatusCache{cache: cache, ttl: ttl}, nil
-}
-
-// Get retrieves a cached entry for the specified domain.
-// It returns a CacheResult indicating whether there was a cache hit and whether
-// the entry has expired. Expired entries are automatically evicted from the cache.
-//
-// A negative cache (nil response) is returned as a valid cache hit to provide
-// DoS protection by remembering invalid domains.
 func (sc *StatusCache) Get(domain string) *types.CacheResult {
 	entry, ok := sc.cache.Get(domain)
 	if !ok {
@@ -75,6 +73,16 @@ func (sc *StatusCache) Set(domain string, response *types.GatewayWebsiteResponse
 	sc.cache.Add(domain, entry)
 }
 
+func (sc *StatusCache) SetShortTTL(domain string, response *types.GatewayWebsiteResponse) {
+	now := time.Now()
+	entry := &types.CacheEntry{
+		Response:  response,
+		CachedAt:  now,
+		ExpiresAt: now.Add(sc.shortTTL),
+	}
+	sc.cache.Add(domain, entry)
+}
+
 // SetInvalid caches a negative result (nil response) for the specified domain.
 // This provides DoS protection by remembering invalid domains and preventing
 // repeated lookups that would fail anyway. The entry expires based on the cache's TTL.
@@ -91,6 +99,16 @@ func (sc *StatusCache) SetError(domain string, err error) {
 		Err:       err,
 		CachedAt:  now,
 		ExpiresAt: now.Add(sc.ttl),
+	}
+	sc.cache.Add(domain, entry)
+}
+
+func (sc *StatusCache) SetErrorShortTTL(domain string, err error) {
+	now := time.Now()
+	entry := &types.CacheEntry{
+		Err:       err,
+		CachedAt:  now,
+		ExpiresAt: now.Add(sc.shortTTL),
 	}
 	sc.cache.Add(domain, entry)
 }

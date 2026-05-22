@@ -142,7 +142,7 @@ func TestCheckAccess_CacheHit(t *testing.T) {
 		},
 	}
 
-	statusCache, err := cache.NewStatusCache(100, 5*time.Minute)
+	statusCache, err := cache.NewStatusCache(100, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache: %v", err)
 	}
@@ -183,7 +183,7 @@ func TestCheckAccess_CacheInvalid(t *testing.T) {
 		},
 	}
 
-	statusCache, err := cache.NewStatusCache(100, 5*time.Minute)
+	statusCache, err := cache.NewStatusCache(100, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache: %v", err)
 	}

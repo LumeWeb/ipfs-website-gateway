@@ -39,8 +39,9 @@ type IPFSConfig struct {
 
 // CacheConfig holds caching configuration settings for both status and content.
 type CacheConfig struct {
-	StatusCacheTTL       time.Duration `config:"status_cache_ttl"`
-	StatusCacheLRUSize   int           `config:"status_cache_lru_size"`
+	StatusCacheTTL         time.Duration `config:"status_cache_ttl"`
+	StatusCacheShortTTL    time.Duration `config:"status_cache_short_ttl"`
+	StatusCacheLRUSize     int           `config:"status_cache_lru_size"`
 	ContentCachePath     string        `config:"content_cache_path"`
 	ContentCacheMaxBytes int64         `config:"content_cache_max_bytes"`
 	ContentCacheLRUSize  int           `config:"content_cache_lru_size"`
@@ -116,8 +117,9 @@ func (c IPFSConfig) Schema() zog.ZogSchema {
 // Defaults implements the Defaults interface for providing default configuration values.
 func (c CacheConfig) Defaults() map[string]any {
 	return map[string]any{
-		"StatusCacheTTL":       5 * time.Minute,
-		"StatusCacheLRUSize":   1000,
+		"StatusCacheTTL":         5 * time.Minute,
+		"StatusCacheShortTTL":    30 * time.Second,
+		"StatusCacheLRUSize":     1000,
 		"ContentCachePath":     "/tmp/ipfs-cache",
 		"ContentCacheMaxBytes": int64(10) * 1024 * 1024 * 1024, // 10 GB
 		"ContentCacheLRUSize":  100000,
@@ -130,8 +132,9 @@ func (c CacheConfig) Defaults() map[string]any {
 // Schema implements the ConfigSchemaProvider interface for Zog validation.
 func (c CacheConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
-		"StatusCacheTTL":       zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
-		"StatusCacheLRUSize":   zog.Int().GT(0).Optional(),
+		"StatusCacheTTL":         zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"StatusCacheShortTTL":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"StatusCacheLRUSize":     zog.Int().GT(0).Optional(),
 		"ContentCachePath":     zog.String().Optional(),
 		"ContentCacheMaxBytes": zog.Int64().GT(0).Optional(),
 		"ContentCacheLRUSize":  zog.Int().GT(0).Optional(),
