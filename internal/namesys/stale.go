@@ -259,11 +259,15 @@ func (s *StaleWhileRevalidateNameSystem) startWatcher(key string) {
 		return
 	}
 
-	go s.watchLoop(ctx, key, p)
+	go s.watchLoop(ctx, key, ws, p)
 }
 
-func (s *StaleWhileRevalidateNameSystem) watchLoop(ctx context.Context, key string, p path.Path) {
-	defer s.watchers.Delete(key)
+func (s *StaleWhileRevalidateNameSystem) watchLoop(ctx context.Context, key string, ws *watcherState, p path.Path) {
+	defer func() {
+		if v, ok := s.watchers.Load(key); ok && v.(*watcherState) == ws {
+			s.watchers.Delete(key)
+		}
+	}()
 
 	ch := s.inner.ResolveAsync(ctx, p)
 
