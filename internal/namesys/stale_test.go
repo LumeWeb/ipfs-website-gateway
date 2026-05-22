@@ -476,6 +476,142 @@ func TestResolve_TimesOut_FallsThroughToStale(t *testing.T) {
 	sut.Stop()
 }
 
+func TestResolve_FastPath_ReturnsImmediatelyWithStaleCache(t *testing.T) {
+	p := newPath(t, "/ipns/example.com")
+
+	blockCh := make(chan struct{})
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			<-blockCh
+			return namesys.Result{Path: p}, nil
+		},
+	}
+
+	store, err := NewIPNSStore(t.TempDir(), 5*time.Minute, 30*time.Second, 128, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	store.PutStale(p.String(), staleEntry{
+		result:   namesys.Result{Path: p, TTL: time.Minute},
+		cachedAt: time.Now(),
+	})
+
+	start := time.Now()
+	result, err := sut.Resolve(context.Background(), p)
+	elapsed := time.Since(start)
+
+	close(blockCh)
+	sut.Stop()
+
+	if err != nil {
+		t.Fatalf("expected no error from fast path, got %v", err)
+	}
+	if result.Path.String() != p.String() {
+		t.Errorf("expected path %s, got %s", p.String(), result.Path.String())
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("fast path should return immediately, took %v", elapsed)
+	}
+}
+
+func TestResolveAsync_FastPath_ReturnsImmediatelyWithStaleCache(t *testing.T) {
+	p := newPath(t, "/ipns/example.com")
+
+	blockCh := make(chan struct{})
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			<-blockCh
+			return namesys.Result{Path: p}, nil
+		},
+	}
+
+	store, err := NewIPNSStore(t.TempDir(), 5*time.Minute, 30*time.Second, 128, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	store.PutStale(p.String(), staleEntry{
+		result:   namesys.Result{Path: p, TTL: time.Minute},
+		cachedAt: time.Now(),
+	})
+
+	start := time.Now()
+	ch := sut.ResolveAsync(context.Background(), p)
+	res := <-ch
+	elapsed := time.Since(start)
+
+	close(blockCh)
+	sut.Stop()
+
+	if res.Err != nil {
+		t.Fatalf("expected no error from async fast path, got %v", res.Err)
+	}
+	if res.Path.String() != p.String() {
+		t.Errorf("expected path %s, got %s", p.String(), res.Path.String())
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("async fast path should return immediately, took %v", elapsed)
+	}
+}
+
+func TestResolve_FastPath_TriggerBackgroundRevalidation(t *testing.T) {
+	p := newPath(t, "/ipns/example.com")
+	newP := newPath(t, "/ipns/new.example.com")
+
+	var resolveCall atomic.Int32
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			n := resolveCall.Add(1)
+			if n == 1 {
+				return namesys.Result{Path: newP, TTL: time.Minute}, nil
+			}
+			return namesys.Result{}, errTestResolve
+		},
+	}
+
+	store, err := NewIPNSStore(t.TempDir(), 5*time.Minute, 30*time.Second, 128, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	store.PutStale(p.String(), staleEntry{
+		result:   namesys.Result{Path: p, TTL: time.Minute},
+		cachedAt: time.Now(),
+	})
+
+	result, err := sut.Resolve(context.Background(), p)
+	if err != nil {
+		t.Fatalf("expected no error from fast path, got %v", err)
+	}
+	if result.Path.String() != p.String() {
+		t.Errorf("fast path should return stale path %s, got %s", p.String(), result.Path.String())
+	}
+
+	sut.Stop()
+
+	if resolveCall.Load() != 1 {
+		t.Errorf("expected 1 background revalidation call, got %d", resolveCall.Load())
+	}
+
+	updated, ok := store.GetStale(p.String())
+	if !ok {
+		t.Fatal("expected stale entry to be updated after revalidation")
+	}
+	if updated.result.Path.String() != newP.String() {
+		t.Errorf("expected stale entry updated to %s, got %s", newP.String(), updated.result.Path.String())
+	}
+}
+
 func TestResolve_TimesOut_NoStale_ReturnsError(t *testing.T) {
 	p := newPath(t, "/ipns/example.com")
 
