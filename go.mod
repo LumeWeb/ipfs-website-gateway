@@ -25,7 +25,7 @@ require (
 	github.com/tj/go-headers v0.0.0-20210318114139-bca4b5702463
 	github.com/urfave/cli/v3 v3.0.0-alpha9
 	go.lumeweb.com/configmanager v0.3.24
-	go.lumeweb.com/ipfs-sdk v0.1.43
+	go.lumeweb.com/ipfs-sdk v0.1.47
 	go.uber.org/zap v1.27.1
 	golang.org/x/time v0.12.0
 )
