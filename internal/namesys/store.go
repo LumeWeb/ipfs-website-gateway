@@ -31,16 +31,16 @@ type persistentStaleEntry struct {
 }
 
 type IPNSStore struct {
-	ldb      ds.Datastore
-	ds       ds.Datastore
-	staleDS  ds.Datastore
-	stale    *lru.Cache[string, staleEntry]
-	staleTTL time.Duration
-	timeout  time.Duration
-	logger   *zap.Logger
+	ldb     ds.Datastore
+	ds      ds.Datastore
+	staleDS ds.Datastore
+	stale   *lru.Cache[string, staleEntry]
+	freshTTL time.Duration
+	timeout time.Duration
+	logger  *zap.Logger
 }
 
-func NewIPNSStore(cachePath string, staleTTL time.Duration, timeout time.Duration, maxSize int, logger *zap.Logger) (*IPNSStore, error) {
+func NewIPNSStore(cachePath string, freshTTL time.Duration, timeout time.Duration, maxSize int, logger *zap.Logger) (*IPNSStore, error) {
 	if maxSize <= 0 {
 		maxSize = 128
 	}
@@ -66,7 +66,7 @@ func NewIPNSStore(cachePath string, staleTTL time.Duration, timeout time.Duratio
 		ds:       dsns.Wrap(ldb, ds.NewKey(ipnsDataPrefix)),
 		staleDS:  dsns.Wrap(ldb, ds.NewKey(stalePrefix)),
 		stale:    staleCache,
-		staleTTL: staleTTL,
+		freshTTL: freshTTL,
 		timeout:  timeout,
 		logger:   logger,
 	}
@@ -89,9 +89,7 @@ func (s *IPNSStore) loadStaleFromDisk(ctx context.Context) error {
 	}
 	defer func() { _ = results.Close() }()
 
-	now := time.Now()
 	loaded := 0
-	expired := 0
 
 	for entry := range results.Next() {
 		if entry.Error != nil {
@@ -109,11 +107,6 @@ func (s *IPNSStore) loadStaleFromDisk(ctx context.Context) error {
 		}
 
 		cachedAt := time.Unix(0, pe.CachedAt)
-		if now.Sub(cachedAt) > s.staleTTL {
-			_ = s.staleDS.Delete(ctx, ds.NewKey(entry.Key))
-			expired++
-			continue
-		}
 
 		s.stale.Add(pe.Path, staleEntry{
 			result: namesys.Result{
@@ -128,7 +121,6 @@ func (s *IPNSStore) loadStaleFromDisk(ctx context.Context) error {
 
 	s.logger.Info("loaded stale IPNS entries from disk",
 		zap.Int("loaded", loaded),
-		zap.Int("expired", expired),
 	)
 
 	return nil
