@@ -30,14 +30,17 @@ type persistentStaleEntry struct {
 	CachedAt int64  `json:"c"`
 }
 
+type EvictFunc func(key string)
+
 type IPNSStore struct {
-	ldb     ds.Datastore
-	ds      ds.Datastore
-	staleDS ds.Datastore
-	stale   *lru.Cache[string, staleEntry]
+	ldb      ds.Datastore
+	ds       ds.Datastore
+	staleDS  ds.Datastore
+	stale    *lru.Cache[string, staleEntry]
 	freshTTL time.Duration
-	timeout time.Duration
-	logger  *zap.Logger
+	timeout  time.Duration
+	logger   *zap.Logger
+	onEvict  EvictFunc
 }
 
 func NewIPNSStore(cachePath string, freshTTL time.Duration, timeout time.Duration, maxSize int, logger *zap.Logger) (*IPNSStore, error) {
@@ -55,21 +58,26 @@ func NewIPNSStore(cachePath string, freshTTL time.Duration, timeout time.Duratio
 		return nil, err
 	}
 
-	staleCache, err := lru.New[string, staleEntry](maxSize)
+	s := &IPNSStore{
+		ldb:      ldb,
+		ds:       dsns.Wrap(ldb, ds.NewKey(ipnsDataPrefix)),
+		staleDS:  dsns.Wrap(ldb, ds.NewKey(stalePrefix)),
+		freshTTL: freshTTL,
+		timeout:  timeout,
+		logger:   logger,
+	}
+
+	staleCache, err := lru.NewWithEvict[string, staleEntry](maxSize, func(key string, _ staleEntry) {
+		if s.onEvict != nil {
+			s.onEvict(key)
+		}
+	})
 	if err != nil {
 		_ = ldb.Close()
 		return nil, err
 	}
 
-	s := &IPNSStore{
-		ldb:      ldb,
-		ds:       dsns.Wrap(ldb, ds.NewKey(ipnsDataPrefix)),
-		staleDS:  dsns.Wrap(ldb, ds.NewKey(stalePrefix)),
-		stale:    staleCache,
-		freshTTL: freshTTL,
-		timeout:  timeout,
-		logger:   logger,
-	}
+	s.stale = staleCache
 
 	if err := s.loadStaleFromDisk(context.Background()); err != nil {
 		logger.Warn("failed to load stale entries from disk, starting fresh", zap.Error(err))
@@ -80,6 +88,10 @@ func NewIPNSStore(cachePath string, freshTTL time.Duration, timeout time.Duratio
 
 func (s *IPNSStore) Datastore() ds.Datastore {
 	return s.ds
+}
+
+func (s *IPNSStore) SetOnEvict(fn EvictFunc) {
+	s.onEvict = fn
 }
 
 func (s *IPNSStore) loadStaleFromDisk(ctx context.Context) error {

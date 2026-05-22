@@ -12,25 +12,31 @@ import (
 	"github.com/ipfs/boxo/bitswap/network/bsnet"
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
+	"github.com/ipfs/boxo/ipns"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/routing"
 	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	pubsubrouter "github.com/libp2p/go-libp2p-pubsub-router"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/multiformats/go-multiaddr"
 	"go.uber.org/zap"
 )
 
 type Node struct {
-	Host         host.Host
-	BlockService blockservice.BlockService
-	Routing      routing.ValueStore
-	routing      *routingProxy
-	ctx          context.Context
-	cancel       context.CancelFunc
-	logger       *zap.Logger
+	Host              host.Host
+	BlockService      blockservice.BlockService
+	Routing           routing.ValueStore
+	Pubsub            *pubsub.PubSub
+	routing           *routingProxy
+	pubsubValueStore  *pubsubrouter.PubsubValueStore
+	ctx               context.Context
+	cancel            context.CancelFunc
+	logger            *zap.Logger
+	pubsubEnabled     bool
 
 	seedPeerRetry struct {
 		mu       sync.Mutex
@@ -75,7 +81,17 @@ func (p *routingProxy) swap(vs routing.ValueStore) {
 	p.mu.Unlock()
 }
 
-func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, bs blockstore.Blockstore, logger *zap.Logger) (*Node, error) {
+func (n *Node) swapRouting(dht routing.ValueStore) {
+	var vs routing.ValueStore
+	if n.pubsubValueStore != nil {
+		vs = newPubsubFirstRouting(n.pubsubValueStore, dht)
+	} else {
+		vs = dht
+	}
+	n.routing.swap(vs)
+}
+
+func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, bs blockstore.Blockstore, logger *zap.Logger, pubsubEnabled bool) (*Node, error) {
 	if bs == nil {
 		return nil, fmt.Errorf("blockstore cannot be nil")
 	}
@@ -83,10 +99,11 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 	nodeCtx, cancel := context.WithCancel(ctx)
 
 	node := &Node{
-		ctx:     nodeCtx,
-		cancel:  cancel,
-		logger:  logger,
-		routing: &routingProxy{current: routinghelpers.Null{}},
+		ctx:           nodeCtx,
+		cancel:        cancel,
+		logger:        logger,
+		routing:       &routingProxy{current: routinghelpers.Null{}},
+		pubsubEnabled: pubsubEnabled,
 	}
 	node.Routing = node.routing
 
@@ -103,6 +120,25 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 	bswapInstance := bitswap.New(nodeCtx, bsnetInstance, nil, bs, bitswap.WithServerEnabled(false))
 
 	node.BlockService = blockservice.New(bs, bswapInstance)
+
+	if pubsubEnabled {
+		gs, err := pubsub.NewGossipSub(nodeCtx, host,
+			pubsub.WithMessageSigning(true),
+			pubsub.WithStrictSignatureVerification(true),
+		)
+		if err != nil {
+			logger.Warn("failed to initialize gossipsub, continuing without pubsub", zap.Error(err))
+		} else {
+			pvs, err := pubsubrouter.NewPubsubValueStore(nodeCtx, host, gs, ipns.Validator{KeyBook: host.Peerstore()})
+			if err != nil {
+				logger.Warn("failed to initialize pubsub value store, continuing without pubsub", zap.Error(err))
+			} else {
+				node.Pubsub = gs
+				node.pubsubValueStore = pvs
+				logger.Info("IPNS pubsub initialized")
+			}
+		}
+	}
 
 	var connected bool
 	if seedPeer != "" {
@@ -127,7 +163,7 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 			if err := spr.Bootstrap(nodeCtx); err != nil {
 				logger.Warn("failed to bootstrap DHT client", zap.Error(err))
 			}
-			node.routing.swap(spr)
+			node.swapRouting(spr)
 		}
 	}
 
@@ -137,6 +173,7 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 
 	logger.Info("IPFS node initialized",
 		zap.String("peer_id", host.ID().String()),
+		zap.Bool("pubsub", node.Pubsub != nil),
 	)
 
 	return node, nil
@@ -241,7 +278,7 @@ func (n *Node) retrySeedPeerLoop() {
 			}
 
 			n.seedPeerRetry.mu.Lock()
-			n.routing.swap(spr)
+			n.swapRouting(spr)
 			n.seedPeerRetry.running = false
 			n.seedPeerRetry.mu.Unlock()
 
