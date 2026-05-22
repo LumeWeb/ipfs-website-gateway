@@ -23,23 +23,41 @@ type staleEntry struct {
 }
 
 type StaleWhileRevalidateNameSystem struct {
-	inner   namesys.NameSystem
-	store   *IPNSStore
-	pending sync.Map
-	pool    *workerpool.WorkerPool
-	logger  *zap.Logger
+	inner         namesys.NameSystem
+	store         *IPNSStore
+	pending       sync.Map
+	pool          *workerpool.WorkerPool
+	logger        *zap.Logger
+	watchers      sync.Map
+	watchMu       sync.Mutex
+	ctx           context.Context
+	cancel        context.CancelFunc
+	watchEnabled  bool
 }
 
 func NewStaleWhileRevalidateNameSystem(inner namesys.NameSystem, store *IPNSStore, maxWorkers int, logger *zap.Logger) *StaleWhileRevalidateNameSystem {
 	if maxWorkers <= 0 {
 		maxWorkers = 4
 	}
-	return &StaleWhileRevalidateNameSystem{
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &StaleWhileRevalidateNameSystem{
 		inner:  inner,
 		store:  store,
 		pool:   workerpool.New(maxWorkers),
 		logger: logger,
+		ctx:    ctx,
+		cancel: cancel,
 	}
+	store.SetOnEvict(func(key string) {
+		if v, ok := s.watchers.LoadAndDelete(key); ok {
+			v.(*watcherState).cancel()
+		}
+	})
+	return s
+}
+
+func (s *StaleWhileRevalidateNameSystem) EnableWatch() {
+	s.watchEnabled = true
 }
 
 func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
@@ -76,6 +94,7 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 	case outcome := <-resolveCh:
 		if outcome.err == nil {
 			s.store.PutStale(p.String(), staleEntry{result: outcome.result, cachedAt: time.Now()})
+			s.startWatcher(p.String())
 			s.logger.Debug("ipns resolve succeeded (fresh)",
 				zap.String("path", p.String()),
 				zap.Duration("ttl", outcome.result.TTL),
@@ -153,6 +172,7 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 				},
 				cachedAt: time.Now(),
 			})
+			s.startWatcher(p.String())
 			s.logger.Debug("ipns async resolve succeeded (fresh)",
 				zap.String("path", p.String()),
 			)
@@ -178,6 +198,7 @@ func (s *StaleWhileRevalidateNameSystem) Publish(ctx context.Context, sk ci.Priv
 }
 
 func (s *StaleWhileRevalidateNameSystem) Stop() {
+	s.cancel()
 	s.pool.StopWait()
 	_ = s.store.Close()
 }
@@ -204,8 +225,75 @@ func (s *StaleWhileRevalidateNameSystem) revalidate(p path.Path, opts []namesys.
 		}
 
 		s.store.PutStale(key, staleEntry{result: result, cachedAt: time.Now()})
+		s.startWatcher(key)
 		s.logger.Debug("background revalidation succeeded",
 			zap.String("path", p.String()),
 		)
 	})
+}
+
+type watcherState struct {
+	cancel context.CancelFunc
+}
+
+func (s *StaleWhileRevalidateNameSystem) startWatcher(key string) {
+	if !s.watchEnabled {
+		return
+	}
+	if _, exists := s.watchers.Load(key); exists {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(s.ctx)
+	ws := &watcherState{cancel: cancel}
+
+	if _, loaded := s.watchers.LoadOrStore(key, ws); loaded {
+		cancel()
+		return
+	}
+
+	p, err := path.NewPath(key)
+	if err != nil {
+		s.watchers.Delete(key)
+		cancel()
+		return
+	}
+
+	go s.watchLoop(ctx, key, ws, p)
+}
+
+func (s *StaleWhileRevalidateNameSystem) watchLoop(ctx context.Context, key string, ws *watcherState, p path.Path) {
+	defer func() {
+		if v, ok := s.watchers.Load(key); ok && v.(*watcherState) == ws {
+			s.watchers.Delete(key)
+		}
+	}()
+
+	ch := s.inner.ResolveAsync(ctx, p)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case res, ok := <-ch:
+			if !ok {
+				return
+			}
+			if res.Err != nil {
+				continue
+			}
+			s.store.PutStale(key, staleEntry{
+				result: namesys.Result{
+					Path:    res.Path,
+					TTL:     res.TTL,
+					LastMod: res.LastMod,
+				},
+				cachedAt: time.Now(),
+			})
+			s.logger.Debug("pubsub proactive cache update",
+				zap.String("path", key),
+			)
+			ch = s.inner.ResolveAsync(ctx, p)
+		}
+	}
 }

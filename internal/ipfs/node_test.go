@@ -26,7 +26,7 @@ func TestNewNode(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, "", 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestNewNodeWithSeedPeer(t *testing.T) {
 
 	seedPeer := "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
 
-	node, err := NewNode(ctx, seedPeer, 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, seedPeer, 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode with seed peer failed: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestNewNodeNilBlockstore(t *testing.T) {
 	ctx := context.Background()
 	logger := zaptest.NewLogger(t)
 
-	_, err := NewNode(ctx, "", 30*time.Second, nil, logger)
+	_, err := NewNode(ctx, "", 30*time.Second, nil, logger, false)
 	if err == nil {
 		t.Error("Expected error for nil blockstore")
 	}
@@ -84,7 +84,7 @@ func TestNodeClose(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, "", 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestNodeCloseIdempotent(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, "", 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestNodePeerID(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, "", 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestNodeAddrs(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, "", 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -162,7 +162,7 @@ func TestConnectedPeers(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, "", 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -179,7 +179,7 @@ func TestConnectedPeersAfterClose(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, "", 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestNewNodeWithSeedPeerRoutingSet(t *testing.T) {
 
 	seedPeer := "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
 
-	node, err := NewNode(ctx, seedPeer, 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, seedPeer, 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode with seed peer failed: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestNewNodeWithUnreachableSeedPeer(t *testing.T) {
 
 	seedPeer := "/ip4/192.0.2.1/tcp/4001/p2p/12D3KooWRBYMhRRPFnEasFnLiSnEC8YWFC5wpFcFfb6V3V33Wmqr"
 
-	node, err := NewNode(ctx, seedPeer, 1*time.Second, bs, logger)
+	node, err := NewNode(ctx, seedPeer, 1*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode should not fail with unreachable seed peer: %v", err)
 	}
@@ -260,7 +260,7 @@ func TestNewNodeNoSeedPeerNoRetry(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, "", 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestSeedPeerRetryStopsOnClose(t *testing.T) {
 
 	seedPeer := "/ip4/192.0.2.1/tcp/4001/p2p/12D3KooWRBYMhRRPFnEasFnLiSnEC8YWFC5wpFcFfb6V3V33Wmqr"
 
-	node, err := NewNode(ctx, seedPeer, 1*time.Second, bs, logger)
+	node, err := NewNode(ctx, seedPeer, 1*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestSeedPeerRetrySucceeds(t *testing.T) {
 
 	seedPeer := "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
 
-	node, err := NewNode(ctx, seedPeer, 30*time.Second, bs, logger)
+	node, err := NewNode(ctx, seedPeer, 30*time.Second, bs, logger, false)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -358,7 +358,7 @@ func BenchmarkNewNode(b *testing.B) {
 		}
 		bs := cache.NewContentBlockstore(cc, zap.NewNop())
 
-		node, err := NewNode(ctx, "", 30*time.Second, bs, logger)
+		node, err := NewNode(ctx, "", 30*time.Second, bs, logger, false)
 		if err != nil {
 			b.Fatalf("NewNode failed: %v", err)
 		}

@@ -32,9 +32,10 @@ type APIConfig struct {
 
 // IPFSConfig holds IPFS network configuration settings.
 type IPFSConfig struct {
-	SeedPeer        string        `config:"seed_peer"`
-	ConnectTimeout  time.Duration `config:"connect_timeout"`
+	SeedPeer         string        `config:"seed_peer"`
+	ConnectTimeout   time.Duration `config:"connect_timeout"`
 	RetrievalTimeout time.Duration `config:"retrieval_timeout"`
+	PubsubEnabled    bool          `config:"pubsub_enabled"`
 }
 
 // CacheConfig holds caching configuration settings for both status and content.
@@ -100,9 +101,10 @@ func (c APIConfig) Schema() zog.ZogSchema {
 // Defaults implements the Defaults interface for providing default configuration values.
 func (c IPFSConfig) Defaults() map[string]any {
 	return map[string]any{
-		"SeedPeer":        "ipfs.pinner.xyz",
-		"ConnectTimeout":  30 * time.Second,
+		"SeedPeer":         "ipfs.pinner.xyz",
+		"ConnectTimeout":   30 * time.Second,
 		"RetrievalTimeout": 30 * time.Second,
+		"PubsubEnabled":    true,
 	}
 }
 

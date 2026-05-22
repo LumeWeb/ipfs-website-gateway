@@ -145,7 +145,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	srv.SetAPIClient(apiClient)
 	srv.SetStatusCache(statusCache)
 
-	gateway, err := gw.NewGateway(node.BlockService, apiClient, statusCache, logger, cfg.IPFS.RetrievalTimeout, node.Routing, cfg.Cache.IPNSCacheLRUSize, cfg.Cache.IPNSCacheFreshTTL, cfg.Cache.IPNSCachePath)
+	gateway, err := gw.NewGateway(node.BlockService, apiClient, statusCache, logger, cfg.IPFS.RetrievalTimeout, node.Routing, cfg.Cache.IPNSCacheLRUSize, cfg.Cache.IPNSCacheFreshTTL, cfg.Cache.IPNSCachePath, cfg.IPFS.PubsubEnabled)
 	if err != nil {
 		logger.Error("failed to initialize gateway", zap.Error(err))
 		return fmt.Errorf("failed to initialize gateway: %w", err)
@@ -225,7 +225,7 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 }
 
 func initIPFSNode(ctx context.Context, cfg *config.Config, bs *cache.ContentBlockstore, logger *zap.Logger) (*ipfs.Node, error) {
-	return ipfs.NewNode(ctx, cfg.IPFS.SeedPeer, cfg.IPFS.ConnectTimeout, bs, logger)
+	return ipfs.NewNode(ctx, cfg.IPFS.SeedPeer, cfg.IPFS.ConnectTimeout, bs, logger, cfg.IPFS.PubsubEnabled)
 }
 
 func setupGracefulShutdown(ctx context.Context) {
