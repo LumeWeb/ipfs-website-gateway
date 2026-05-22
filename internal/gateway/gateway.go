@@ -129,10 +129,23 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.Gatewa
 	if g.statusCache != nil {
 		result := g.statusCache.Get(domain)
 		if result.Hit && !result.Expired && result.Entry != nil {
+			g.logger.Debug("status cache hit",
+				zap.String("domain", domain),
+			)
 			if result.Entry.Err != nil {
 				return nil, result.Entry.Err
 			}
 			return result.Entry.Response, nil
+		}
+		if result.Hit && result.Expired {
+			g.logger.Debug("status cache expired, revalidating",
+				zap.String("domain", domain),
+			)
+		}
+		if !result.Hit {
+			g.logger.Debug("status cache miss",
+				zap.String("domain", domain),
+			)
 		}
 	}
 

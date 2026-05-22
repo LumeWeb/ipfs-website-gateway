@@ -130,6 +130,21 @@ func TestAllowedHandler_ValidatesDomain(t *testing.T) {
 			domain:         "test_domain.com",
 			expectedStatus: http.StatusBadRequest,
 		},
+		{
+			name:           "IPv4 address returns 400",
+			domain:         "172.18.0.2",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "IPv6 address returns 400",
+			domain:         "::1",
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name:           "IPv6 full address returns 400",
+			domain:         "2001:db8::1",
+			expectedStatus: http.StatusBadRequest,
+		},
 	}
 
 	for _, tt := range tests {

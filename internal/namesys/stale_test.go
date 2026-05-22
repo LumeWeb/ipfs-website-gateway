@@ -358,3 +358,155 @@ func TestDefaultMaxWorkers(t *testing.T) {
 	}
 	sut.Stop()
 }
+
+func TestResolveAsync_PropagatesError(t *testing.T) {
+	p := newPath(t, "/ipns/example.com")
+
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			return namesys.Result{}, errTestResolve
+		},
+	}
+
+	store := newTestStore(t)
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	ch := sut.ResolveAsync(context.Background(), p)
+	res := <-ch
+	if res.Err == nil {
+		t.Fatal("expected error from async resolve with no stale fallback, got nil")
+	}
+	if !errors.Is(res.Err, errTestResolve) {
+		t.Errorf("expected errTestResolve, got %v", res.Err)
+	}
+	sut.Stop()
+}
+
+func TestResolveAsync_ExpiredStaleEntry(t *testing.T) {
+	p := newPath(t, "/ipns/example.com")
+
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			return namesys.Result{}, errTestResolve
+		},
+	}
+
+	store, err := NewIPNSStore(t.TempDir(), 1*time.Nanosecond, 30*time.Second, 128, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	store.PutStale(p.String(), staleEntry{
+		result:   namesys.Result{Path: p},
+		cachedAt: time.Now().Add(-time.Second),
+	})
+
+	ch := sut.ResolveAsync(context.Background(), p)
+	res := <-ch
+	if res.Err == nil {
+		t.Fatal("expected error from async resolve with expired stale entry, got nil")
+	}
+	if !errors.Is(res.Err, errStaleExpired) && !errors.Is(res.Err, errTestResolve) {
+		t.Errorf("expected errStaleExpired or errTestResolve, got %v", res.Err)
+	}
+	sut.Stop()
+}
+
+func TestResolve_RespectsContextTimeout(t *testing.T) {
+	p := newPath(t, "/ipns/example.com")
+
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			<-ctx.Done()
+			return namesys.Result{}, ctx.Err()
+		},
+	}
+
+	store := newTestStore(t)
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	ch := sut.ResolveAsync(ctx, p)
+	select {
+	case res := <-ch:
+		if res.Err == nil {
+			t.Error("expected error from timed out resolve, got nil")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ResolveAsync hung — context timeout not working")
+	}
+	sut.Stop()
+}
+
+func TestResolve_TimesOut_FallsThroughToStale(t *testing.T) {
+	p := newPath(t, "/ipns/example.com")
+
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			<-ctx.Done()
+			return namesys.Result{}, ctx.Err()
+		},
+	}
+
+	store, err := NewIPNSStore(t.TempDir(), 5*time.Minute, 100*time.Millisecond, 128, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	store.PutStale(p.String(), staleEntry{
+		result:   namesys.Result{Path: p},
+		cachedAt: time.Now(),
+	})
+
+	result, err := sut.Resolve(context.Background(), p)
+	if err != nil {
+		t.Fatalf("expected stale result on timeout, got error: %v", err)
+	}
+	if result.Path.String() != p.String() {
+		t.Errorf("expected stale path %s, got %s", p.String(), result.Path.String())
+	}
+	sut.Stop()
+}
+
+func TestResolve_TimesOut_NoStale_ReturnsError(t *testing.T) {
+	p := newPath(t, "/ipns/example.com")
+
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			<-ctx.Done()
+			return namesys.Result{}, ctx.Err()
+		},
+	}
+
+	store, err := NewIPNSStore(t.TempDir(), 5*time.Minute, 100*time.Millisecond, 128, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := sut.Resolve(context.Background(), p)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected error from timed out resolve with no stale fallback, got nil")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Resolve hung — timeout not working")
+	}
+	sut.Stop()
+}
