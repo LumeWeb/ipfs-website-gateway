@@ -60,7 +60,7 @@ func newPath(t *testing.T, s string) path.Path {
 
 func newTestStore(t *testing.T) *IPNSStore {
 	t.Helper()
-	store, err := NewIPNSStore(t.TempDir(), 5*time.Minute, 30*time.Second, 128, zap.NewNop())
+	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,16 +84,11 @@ func TestResolve_CacheHit_ReturnsFresh(t *testing.T) {
 	sut.Stop()
 }
 
-func TestResolve_StaleReturnedWhileRevalidating(t *testing.T) {
+func TestResolve_FreshWindow_NoRevalidation(t *testing.T) {
 	p := newPath(t, "/ipns/example.com")
-	callCount := int32(0)
 
 	mock := &mockNameSystem{
 		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
-			n := atomic.AddInt32(&callCount, 1)
-			if n == 1 {
-				return namesys.Result{Path: p}, nil
-			}
 			return namesys.Result{}, errTestResolve
 		},
 	}
@@ -101,31 +96,41 @@ func TestResolve_StaleReturnedWhileRevalidating(t *testing.T) {
 	store := newTestStore(t)
 	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
 
-	_, err := sut.Resolve(context.Background(), p)
-	if err != nil {
-		t.Fatalf("first resolve: expected no error, got %v", err)
-	}
+	store.PutStale(p.String(), staleEntry{
+		result:   namesys.Result{Path: p},
+		cachedAt: time.Now(),
+	})
 
 	result, err := sut.Resolve(context.Background(), p)
 	if err != nil {
-		t.Fatalf("second resolve (stale): expected no error, got %v", err)
+		t.Fatalf("expected no error from fresh cache, got %v", err)
 	}
 	if result.Path.String() != p.String() {
-		t.Errorf("stale: expected path %s, got %s", p.String(), result.Path.String())
+		t.Errorf("expected path %s, got %s", p.String(), result.Path.String())
+	}
+
+	if mock.resolveCall.Load() != 0 {
+		t.Errorf("fresh window should not trigger revalidation, got %d calls", mock.resolveCall.Load())
 	}
 	sut.Stop()
 }
 
-func TestResolve_StaleExpired_ReturnsError(t *testing.T) {
+func TestResolve_StaleWindow_TriggersRevalidation(t *testing.T) {
 	p := newPath(t, "/ipns/example.com")
+	newP := newPath(t, "/ipns/new.example.com")
 
+	var resolveCall atomic.Int32
 	mock := &mockNameSystem{
 		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			n := resolveCall.Add(1)
+			if n == 1 {
+				return namesys.Result{Path: newP, TTL: time.Minute}, nil
+			}
 			return namesys.Result{}, errTestResolve
 		},
 	}
 
-	store, err := NewIPNSStore(t.TempDir(), 1*time.Nanosecond, 30*time.Second, 128, zap.NewNop())
+	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,14 +140,30 @@ func TestResolve_StaleExpired_ReturnsError(t *testing.T) {
 
 	store.PutStale(p.String(), staleEntry{
 		result:   namesys.Result{Path: p},
-		cachedAt: time.Now().Add(-time.Second),
+		cachedAt: time.Now().Add(-time.Minute),
 	})
 
-	_, err = sut.Resolve(context.Background(), p)
-	if !errors.Is(err, errTestResolve) {
-		t.Fatalf("expected errTestResolve, got %v", err)
+	result, err := sut.Resolve(context.Background(), p)
+	if err != nil {
+		t.Fatalf("expected no error from stale cache, got %v", err)
 	}
+	if result.Path.String() != p.String() {
+		t.Errorf("expected stale path %s, got %s", p.String(), result.Path.String())
+	}
+
 	sut.Stop()
+
+	if resolveCall.Load() != 1 {
+		t.Errorf("stale window should trigger 1 revalidation, got %d calls", resolveCall.Load())
+	}
+
+	updated, ok := store.GetStale(p.String())
+	if !ok {
+		t.Fatal("expected stale entry to be updated after revalidation")
+	}
+	if updated.result.Path.String() != newP.String() {
+		t.Errorf("expected stale entry updated to %s, got %s", newP.String(), updated.result.Path.String())
+	}
 }
 
 func TestResolve_NoStale_NoCache_ReturnsError(t *testing.T) {
@@ -158,7 +179,7 @@ func TestResolve_NoStale_NoCache_ReturnsError(t *testing.T) {
 	sut.Stop()
 }
 
-func TestResolveAsync_StaleReturnedWhileRevalidating(t *testing.T) {
+func TestResolveAsync_StaleServedWithoutError(t *testing.T) {
 	p := newPath(t, "/ipns/example.com")
 
 	mock := &mockNameSystem{
@@ -172,7 +193,7 @@ func TestResolveAsync_StaleReturnedWhileRevalidating(t *testing.T) {
 
 	store.PutStale(p.String(), staleEntry{
 		result:   namesys.Result{Path: p},
-		cachedAt: time.Now(),
+		cachedAt: time.Now().Add(-time.Hour),
 	})
 
 	ch := sut.ResolveAsync(context.Background(), p)
@@ -277,7 +298,7 @@ func TestIPNSStore_PersistsAcrossRestart(t *testing.T) {
 
 	p := newPath(t, "/ipns/example.com")
 
-	store1, err := NewIPNSStore(dir, 5*time.Minute, 30*time.Second, 128, zap.NewNop())
+	store1, err := NewIPNSStore(dir, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +308,7 @@ func TestIPNSStore_PersistsAcrossRestart(t *testing.T) {
 	})
 	_ = store1.Close()
 
-	store2, err := NewIPNSStore(dir, 5*time.Minute, 30*time.Second, 128, zap.NewNop())
+	store2, err := NewIPNSStore(dir, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,12 +323,12 @@ func TestIPNSStore_PersistsAcrossRestart(t *testing.T) {
 	}
 }
 
-func TestIPNSStore_ExpiredEntriesPrunedOnLoad(t *testing.T) {
+func TestIPNSStore_OldEntriesSurviveRestart(t *testing.T) {
 	dir := t.TempDir()
 
 	p := newPath(t, "/ipns/example.com")
 
-	store1, err := NewIPNSStore(dir, 1*time.Nanosecond, 30*time.Second, 128, zap.NewNop())
+	store1, err := NewIPNSStore(dir, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,20 +338,23 @@ func TestIPNSStore_ExpiredEntriesPrunedOnLoad(t *testing.T) {
 	})
 	_ = store1.Close()
 
-	store2, err := NewIPNSStore(dir, 1*time.Nanosecond, 30*time.Second, 128, zap.NewNop())
+	store2, err := NewIPNSStore(dir, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = store2.Close() }()
 
-	_, ok := store2.GetStale("/ipns/example.com")
-	if ok {
-		t.Error("expected expired stale entry to be pruned on load")
+	got, ok := store2.GetStale("/ipns/example.com")
+	if !ok {
+		t.Fatal("expected old stale entry to survive restart (no age-based eviction)")
+	}
+	if got.result.Path.String() != p.String() {
+		t.Errorf("expected path %s, got %s", p.String(), got.result.Path.String())
 	}
 }
 
 func TestIPNSStore_LRUEviction(t *testing.T) {
-	store, err := NewIPNSStore(t.TempDir(), 5*time.Minute, 30*time.Second, 3, zap.NewNop())
+	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 3, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -382,39 +406,6 @@ func TestResolveAsync_PropagatesError(t *testing.T) {
 	sut.Stop()
 }
 
-func TestResolveAsync_ExpiredStaleEntry(t *testing.T) {
-	p := newPath(t, "/ipns/example.com")
-
-	mock := &mockNameSystem{
-		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
-			return namesys.Result{}, errTestResolve
-		},
-	}
-
-	store, err := NewIPNSStore(t.TempDir(), 1*time.Nanosecond, 30*time.Second, 128, zap.NewNop())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = store.Close() }()
-
-	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
-
-	store.PutStale(p.String(), staleEntry{
-		result:   namesys.Result{Path: p},
-		cachedAt: time.Now().Add(-time.Second),
-	})
-
-	ch := sut.ResolveAsync(context.Background(), p)
-	res := <-ch
-	if res.Err == nil {
-		t.Fatal("expected error from async resolve with expired stale entry, got nil")
-	}
-	if !errors.Is(res.Err, errStaleExpired) && !errors.Is(res.Err, errTestResolve) {
-		t.Errorf("expected errStaleExpired or errTestResolve, got %v", res.Err)
-	}
-	sut.Stop()
-}
-
 func TestResolve_RespectsContextTimeout(t *testing.T) {
 	p := newPath(t, "/ipns/example.com")
 
@@ -443,17 +434,18 @@ func TestResolve_RespectsContextTimeout(t *testing.T) {
 	sut.Stop()
 }
 
-func TestResolve_TimesOut_FallsThroughToStale(t *testing.T) {
+func TestResolve_FastPath_ReturnsImmediatelyWithStaleCache(t *testing.T) {
 	p := newPath(t, "/ipns/example.com")
 
+	blockCh := make(chan struct{})
 	mock := &mockNameSystem{
 		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
-			<-ctx.Done()
-			return namesys.Result{}, ctx.Err()
+			<-blockCh
+			return namesys.Result{Path: p}, nil
 		},
 	}
 
-	store, err := NewIPNSStore(t.TempDir(), 5*time.Minute, 100*time.Millisecond, 128, zap.NewNop())
+	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,18 +454,69 @@ func TestResolve_TimesOut_FallsThroughToStale(t *testing.T) {
 	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
 
 	store.PutStale(p.String(), staleEntry{
-		result:   namesys.Result{Path: p},
+		result:   namesys.Result{Path: p, TTL: time.Minute},
 		cachedAt: time.Now(),
 	})
 
+	start := time.Now()
 	result, err := sut.Resolve(context.Background(), p)
+	elapsed := time.Since(start)
+
+	close(blockCh)
+	sut.Stop()
+
 	if err != nil {
-		t.Fatalf("expected stale result on timeout, got error: %v", err)
+		t.Fatalf("expected no error from fast path, got %v", err)
 	}
 	if result.Path.String() != p.String() {
-		t.Errorf("expected stale path %s, got %s", p.String(), result.Path.String())
+		t.Errorf("expected path %s, got %s", p.String(), result.Path.String())
 	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("fast path should return immediately, took %v", elapsed)
+	}
+}
+
+func TestResolveAsync_FastPath_ReturnsImmediatelyWithStaleCache(t *testing.T) {
+	p := newPath(t, "/ipns/example.com")
+
+	blockCh := make(chan struct{})
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			<-blockCh
+			return namesys.Result{Path: p}, nil
+		},
+	}
+
+	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	store.PutStale(p.String(), staleEntry{
+		result:   namesys.Result{Path: p, TTL: time.Minute},
+		cachedAt: time.Now(),
+	})
+
+	start := time.Now()
+	ch := sut.ResolveAsync(context.Background(), p)
+	res := <-ch
+	elapsed := time.Since(start)
+
+	close(blockCh)
 	sut.Stop()
+
+	if res.Err != nil {
+		t.Fatalf("expected no error from async fast path, got %v", res.Err)
+	}
+	if res.Path.String() != p.String() {
+		t.Errorf("expected path %s, got %s", p.String(), res.Path.String())
+	}
+	if elapsed > 100*time.Millisecond {
+		t.Errorf("async fast path should return immediately, took %v", elapsed)
+	}
 }
 
 func TestResolve_TimesOut_NoStale_ReturnsError(t *testing.T) {

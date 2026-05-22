@@ -52,7 +52,7 @@ type Gateway struct {
 	nameSys     *stalenamesys.StaleWhileRevalidateNameSystem
 }
 
-func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsMaxTTL time.Duration, ipnsCachePath string) (*Gateway, error) {
+func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsFreshTTL time.Duration, ipnsCachePath string) (*Gateway, error) {
 	ns, err := gateway.NewDNSResolver(nil, nil)
 	if err != nil {
 		return nil, err
@@ -62,7 +62,7 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 		valueStore = routinghelpers.Null{}
 	}
 
-	ipnsStore, err := stalenamesys.NewIPNSStore(ipnsCachePath, ipnsMaxTTL, retrievalTimeout, ipnsCacheSize, logger)
+	ipnsStore, err := stalenamesys.NewIPNSStore(ipnsCachePath, ipnsFreshTTL, retrievalTimeout, ipnsCacheSize, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -74,8 +74,8 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 	if ipnsCacheSize > 0 {
 		namesysOpts = append(namesysOpts, namesys.WithCache(ipnsCacheSize))
 	}
-	if ipnsMaxTTL > 0 {
-		namesysOpts = append(namesysOpts, namesys.WithMaxCacheTTL(ipnsMaxTTL))
+	if ipnsFreshTTL > 0 {
+		namesysOpts = append(namesysOpts, namesys.WithMaxCacheTTL(ipnsFreshTTL))
 	}
 
 	nameSystem, err := namesys.NewNameSystem(valueStore, namesysOpts...)
