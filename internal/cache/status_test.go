@@ -11,7 +11,7 @@ func TestNewStatusCache(t *testing.T) {
 	size := 100
 	ttl := 5 * time.Minute
 
-	cache, err := NewStatusCache(size, ttl)
+	cache, err := NewStatusCache(size, ttl, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestNewStatusCache(t *testing.T) {
 }
 
 func TestStatusCache_Get_Miss(t *testing.T) {
-	cache, err := NewStatusCache(10, 5*time.Minute)
+	cache, err := NewStatusCache(10, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestStatusCache_Get_Miss(t *testing.T) {
 }
 
 func TestStatusCache_SetAndGet_Hit(t *testing.T) {
-	cache, err := NewStatusCache(10, 5*time.Minute)
+	cache, err := NewStatusCache(10, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestStatusCache_SetAndGet_Hit(t *testing.T) {
 }
 
 func TestStatusCache_SetAndGet_Expired(t *testing.T) {
-	cache, err := NewStatusCache(10, 10*time.Millisecond)
+	cache, err := NewStatusCache(10, 10*time.Millisecond, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -125,7 +125,7 @@ func TestStatusCache_SetAndGet_Expired(t *testing.T) {
 }
 
 func TestStatusCache_SetInvalid(t *testing.T) {
-	cache, err := NewStatusCache(10, 5*time.Minute)
+	cache, err := NewStatusCache(10, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -151,7 +151,7 @@ func TestStatusCache_SetInvalid(t *testing.T) {
 }
 
 func TestStatusCache_LRUEviction(t *testing.T) {
-	cache, err := NewStatusCache(3, 5*time.Minute)
+	cache, err := NewStatusCache(3, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestStatusCache_LRUEviction(t *testing.T) {
 }
 
 func TestStatusCache_LRUEviction_AccessOrder(t *testing.T) {
-	cache, err := NewStatusCache(3, 5*time.Minute)
+	cache, err := NewStatusCache(3, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestStatusCache_LRUEviction_AccessOrder(t *testing.T) {
 }
 
 func TestStatusCache_CacheMetadata(t *testing.T) {
-	cache, err := NewStatusCache(10, 5*time.Minute)
+	cache, err := NewStatusCache(10, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -257,7 +257,7 @@ func TestStatusCache_CacheMetadata(t *testing.T) {
 }
 
 func TestStatusCache_OverwriteEntry(t *testing.T) {
-	cache, err := NewStatusCache(10, 5*time.Minute)
+	cache, err := NewStatusCache(10, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestStatusCache_OverwriteEntry(t *testing.T) {
 }
 
 func TestStatusCache_EmptyDomain(t *testing.T) {
-	cache, err := NewStatusCache(10, 5*time.Minute)
+	cache, err := NewStatusCache(10, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestStatusCache_EmptyDomain(t *testing.T) {
 
 func TestNewStatusCache_InvalidSize(t *testing.T) {
 	t.Run("zero size", func(t *testing.T) {
-		_, err := NewStatusCache(0, 5*time.Minute)
+		_, err := NewStatusCache(0, 5*time.Minute, 30*time.Second)
 		if err == nil {
 			t.Error("expected error for zero size")
 		}
@@ -321,7 +321,7 @@ func TestNewStatusCache_InvalidSize(t *testing.T) {
 	})
 
 	t.Run("negative size", func(t *testing.T) {
-		_, err := NewStatusCache(-10, 5*time.Minute)
+		_, err := NewStatusCache(-10, 5*time.Minute, 30*time.Second)
 		if err == nil {
 			t.Error("expected error for negative size")
 		}
@@ -333,7 +333,7 @@ func TestNewStatusCache_InvalidSize(t *testing.T) {
 
 func TestNewStatusCache_InvalidTTL(t *testing.T) {
 	t.Run("zero ttl", func(t *testing.T) {
-		_, err := NewStatusCache(10, 0)
+		_, err := NewStatusCache(10, 0, 30*time.Second)
 		if err == nil {
 			t.Error("expected error for zero TTL")
 		}
@@ -343,7 +343,7 @@ func TestNewStatusCache_InvalidTTL(t *testing.T) {
 	})
 
 	t.Run("negative ttl", func(t *testing.T) {
-		_, err := NewStatusCache(10, -5*time.Minute)
+		_, err := NewStatusCache(10, -5*time.Minute, 30*time.Second)
 		if err == nil {
 			t.Error("expected error for negative TTL")
 		}

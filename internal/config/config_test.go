@@ -26,6 +26,7 @@ func TestConfigStructs(t *testing.T) {
 		},
 		Cache: CacheConfig{
 			StatusCacheTTL:       5 * time.Minute,
+			StatusCacheShortTTL: 30 * time.Second,
 			StatusCacheLRUSize:   1000,
 			ContentCachePath:     "/tmp/cache",
 			ContentCacheMaxBytes: 1024 * 1024 * 1024, // 1GB
@@ -63,6 +64,9 @@ func TestConfigStructs(t *testing.T) {
 	// Verify Cache settings
 	if cfg.Cache.StatusCacheTTL != 5*time.Minute {
 		t.Errorf("Expected StatusCacheTTL to be 5m, got %v", cfg.Cache.StatusCacheTTL)
+	}
+	if cfg.Cache.StatusCacheShortTTL != 30*time.Second {
+		t.Errorf("Expected StatusCacheShortTTL to be 30s, got %v", cfg.Cache.StatusCacheShortTTL)
 	}
 	if cfg.Cache.StatusCacheLRUSize != 1000 {
 		t.Errorf("Expected StatusCacheLRUSize to be 1000, got %d", cfg.Cache.StatusCacheLRUSize)
@@ -125,6 +129,9 @@ func TestDefaultsInterface(t *testing.T) {
 	if cacheDefaults["StatusCacheTTL"] != 5*time.Minute {
 		t.Errorf("Expected default Cache.StatusCacheTTL to be 5m, got %v", cacheDefaults["StatusCacheTTL"])
 	}
+	if cacheDefaults["StatusCacheShortTTL"] != 30*time.Second {
+		t.Errorf("Expected default Cache.StatusCacheShortTTL to be 30s, got %v", cacheDefaults["StatusCacheShortTTL"])
+	}
 	if cacheDefaults["StatusCacheLRUSize"] != 1000 {
 		t.Errorf("Expected default Cache.StatusCacheLRUSize to be 1000, got %v", cacheDefaults["StatusCacheLRUSize"])
 	}
@@ -176,6 +183,9 @@ func TestManagerWithDefaults(t *testing.T) {
 	}
 	if cfg.Cache.StatusCacheTTL != 5*time.Minute {
 		t.Errorf("Expected default StatusCacheTTL to be 5m, got %v", cfg.Cache.StatusCacheTTL)
+	}
+	if cfg.Cache.StatusCacheShortTTL != 30*time.Second {
+		t.Errorf("Expected default StatusCacheShortTTL to be 30s, got %v", cfg.Cache.StatusCacheShortTTL)
 	}
 	if cfg.Cache.StatusCacheLRUSize != 1000 {
 		t.Errorf("Expected default StatusCacheLRUSize to be 1000, got %d", cfg.Cache.StatusCacheLRUSize)
