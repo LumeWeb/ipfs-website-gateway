@@ -76,6 +76,9 @@ func (r *pubsubFirstRouting) SearchValue(ctx context.Context, key string, opts .
 }
 
 func drainChannel(ch <-chan []byte) {
+	if ch == nil {
+		return
+	}
 	for range ch {
 	}
 }

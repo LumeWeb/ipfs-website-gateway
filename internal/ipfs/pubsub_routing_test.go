@@ -354,3 +354,54 @@ func TestPubsubFirstRouting_SearchValue_DrainsLoserChannel(t *testing.T) {
 		t.Fatal("losing channel was not drained — goroutine leak")
 	}
 }
+
+func TestDrainChannel_NilChannel(t *testing.T) {
+	done := make(chan struct{})
+	go func() {
+		drainChannel(nil)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("drainChannel(nil) blocked forever — goroutine leak")
+	}
+}
+
+func TestPubsubFirstRouting_SearchValue_ClosedLoserDrainedWithoutLeak(t *testing.T) {
+	pubsubCh := make(chan []byte, 1)
+	pubsubCh <- []byte("from-pubsub")
+
+	pubsub := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return pubsubCh, nil
+		},
+	}
+
+	dhtCh := make(chan []byte)
+	close(dhtCh)
+
+	dht := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return dhtCh, nil
+		},
+	}
+
+	r := newPubsubFirstRouting(pubsub, dht)
+	ch, err := r.SearchValue(context.Background(), "key")
+	if err != nil {
+		t.Fatalf("SearchValue returned error: %v", err)
+	}
+
+	val := <-ch
+	if string(val) != "from-pubsub" {
+		t.Fatalf("got %q, want %q", val, "from-pubsub")
+	}
+
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closed loser channel not drained — goroutine leak")
+	}
+}
