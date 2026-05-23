@@ -55,12 +55,14 @@ func (r *pubsubFirstRouting) SearchValue(ctx context.Context, key string, opts .
 			case val, ok := <-psCh:
 				if ok {
 					out <- val
+					go drainChannel(dhtCh)
 					return
 				}
 				psCh = nil
 			case val, ok := <-dhtCh:
 				if ok {
 					out <- val
+					go drainChannel(psCh)
 					return
 				}
 				dhtCh = nil
@@ -71,4 +73,9 @@ func (r *pubsubFirstRouting) SearchValue(ctx context.Context, key string, opts .
 	}()
 
 	return out, nil
+}
+
+func drainChannel(ch <-chan []byte) {
+	for range ch {
+	}
 }

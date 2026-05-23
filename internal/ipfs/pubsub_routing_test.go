@@ -314,3 +314,43 @@ func TestPubsubFirstRouting_SearchValue_BothEmpty_Timeout(t *testing.T) {
 		t.Error("expected channel to close on context timeout without data")
 	}
 }
+
+func TestPubsubFirstRouting_SearchValue_DrainsLoserChannel(t *testing.T) {
+	pubsubCh := make(chan []byte, 1)
+	pubsubCh <- []byte("from-pubsub")
+
+	pubsub := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return pubsubCh, nil
+		},
+	}
+
+	dhtCh := make(chan []byte, 3)
+
+	dht := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return dhtCh, nil
+		},
+	}
+
+	r := newPubsubFirstRouting(pubsub, dht)
+	ch, err := r.SearchValue(context.Background(), "key")
+	if err != nil {
+		t.Fatalf("SearchValue returned error: %v", err)
+	}
+
+	val := <-ch
+	if string(val) != "from-pubsub" {
+		t.Fatalf("got %q, want %q", val, "from-pubsub")
+	}
+
+	dhtCh <- []byte("dht-1")
+	dhtCh <- []byte("dht-2")
+	close(dhtCh)
+
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatal("losing channel was not drained — goroutine leak")
+	}
+}
