@@ -30,9 +30,45 @@ func (r *pubsubFirstRouting) GetValue(ctx context.Context, key string, opts ...r
 }
 
 func (r *pubsubFirstRouting) SearchValue(ctx context.Context, key string, opts ...routing.Option) (<-chan []byte, error) {
-	ch, err := r.pubsub.SearchValue(ctx, key, opts...)
-	if err == nil {
-		return ch, nil
+	psCh, psErr := r.pubsub.SearchValue(ctx, key, opts...)
+	dhtCh, dhtErr := r.dht.SearchValue(ctx, key, opts...)
+
+	if psErr != nil && dhtErr != nil {
+		return nil, dhtErr
 	}
-	return r.dht.SearchValue(ctx, key, opts...)
+
+	if psErr != nil {
+		return dhtCh, nil
+	}
+
+	if dhtErr != nil {
+		return psCh, nil
+	}
+
+	out := make(chan []byte, 1)
+
+	go func() {
+		defer close(out)
+
+		for psCh != nil || dhtCh != nil {
+			select {
+			case val, ok := <-psCh:
+				if ok {
+					out <- val
+					return
+				}
+				psCh = nil
+			case val, ok := <-dhtCh:
+				if ok {
+					out <- val
+					return
+				}
+				dhtCh = nil
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return out, nil
 }

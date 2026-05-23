@@ -87,6 +87,7 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 	wrappedNameSystem := stalenamesys.NewStaleWhileRevalidateNameSystem(nameSystem, ipnsStore, 4, logger)
 	if pubsubEnabled {
 		wrappedNameSystem.EnableWatch()
+		wrappedNameSystem.WarmSubscriptions()
 	}
 
 	backend, err := gateway.NewBlocksBackend(bs, gateway.WithNameSystem(wrappedNameSystem))

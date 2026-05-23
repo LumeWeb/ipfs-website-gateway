@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/libp2p/go-libp2p/core/routing"
 )
@@ -112,9 +113,82 @@ func TestPubsubFirstRouting_GetValue_BothFail(t *testing.T) {
 	}
 }
 
-func TestPubsubFirstRouting_SearchValue_PrefersPubsub(t *testing.T) {
+func TestPubsubFirstRouting_SearchValue_PubsubErrors_DHTDelivers(t *testing.T) {
+	pubsub := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return nil, errors.New("pubsub not available")
+		},
+	}
+
+	dhtCh := make(chan []byte, 1)
+	dhtCh <- []byte("from-dht")
+
+	dht := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return dhtCh, nil
+		},
+	}
+
+	r := newPubsubFirstRouting(pubsub, dht)
+	ch, err := r.SearchValue(context.Background(), "key")
+	if err != nil {
+		t.Fatalf("SearchValue returned error: %v", err)
+	}
+	val := <-ch
+	if string(val) != "from-dht" {
+		t.Fatalf("got %q, want %q", val, "from-dht")
+	}
+}
+
+func TestPubsubFirstRouting_SearchValue_DHTErrors_PubsubDelivers(t *testing.T) {
 	pubsubCh := make(chan []byte, 1)
 	pubsubCh <- []byte("from-pubsub")
+
+	pubsub := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return pubsubCh, nil
+		},
+	}
+
+	dht := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return nil, errors.New("dht not available")
+		},
+	}
+
+	r := newPubsubFirstRouting(pubsub, dht)
+	ch, err := r.SearchValue(context.Background(), "key")
+	if err != nil {
+		t.Fatalf("SearchValue returned error: %v", err)
+	}
+	val := <-ch
+	if string(val) != "from-pubsub" {
+		t.Fatalf("got %q, want %q", val, "from-pubsub")
+	}
+}
+
+func TestPubsubFirstRouting_SearchValue_BothError(t *testing.T) {
+	pubsub := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return nil, errors.New("pubsub failed")
+		},
+	}
+
+	dht := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return nil, errors.New("dht failed")
+		},
+	}
+
+	r := newPubsubFirstRouting(pubsub, dht)
+	_, err := r.SearchValue(context.Background(), "key")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestPubsubFirstRouting_SearchValue_PubsubEmpty_DHTDelivers(t *testing.T) {
+	pubsubCh := make(chan []byte)
 
 	pubsub := &mockValueStore{
 		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
@@ -137,20 +211,25 @@ func TestPubsubFirstRouting_SearchValue_PrefersPubsub(t *testing.T) {
 		t.Fatalf("SearchValue returned error: %v", err)
 	}
 	val := <-ch
-	if string(val) != "from-pubsub" {
-		t.Fatalf("got %q, want %q", val, "from-pubsub")
+	if string(val) != "from-dht" {
+		t.Fatalf("got %q, want %q", val, "from-dht")
 	}
 }
 
-func TestPubsubFirstRouting_SearchValue_FallsBackToDHT(t *testing.T) {
+func TestPubsubFirstRouting_SearchValue_PubsubSlow_DHTWins(t *testing.T) {
+	pubsubCh := make(chan []byte)
+
 	pubsub := &mockValueStore{
 		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
-			return nil, errors.New("not found")
+			return pubsubCh, nil
 		},
 	}
 
 	dhtCh := make(chan []byte, 1)
-	dhtCh <- []byte("from-dht")
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		dhtCh <- []byte("from-dht")
+	}()
 
 	dht := &mockValueStore{
 		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
@@ -158,13 +237,80 @@ func TestPubsubFirstRouting_SearchValue_FallsBackToDHT(t *testing.T) {
 		},
 	}
 
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	r := newPubsubFirstRouting(pubsub, dht)
-	ch, err := r.SearchValue(context.Background(), "key")
+	ch, err := r.SearchValue(ctx, "key")
 	if err != nil {
 		t.Fatalf("SearchValue returned error: %v", err)
 	}
 	val := <-ch
 	if string(val) != "from-dht" {
 		t.Fatalf("got %q, want %q", val, "from-dht")
+	}
+}
+
+func TestPubsubFirstRouting_SearchValue_PubsubFast_PubsubWins(t *testing.T) {
+	pubsubCh := make(chan []byte, 1)
+	pubsubCh <- []byte("from-pubsub")
+
+	pubsub := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return pubsubCh, nil
+		},
+	}
+
+	dhtCh := make(chan []byte)
+
+	dht := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return dhtCh, nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	r := newPubsubFirstRouting(pubsub, dht)
+	ch, err := r.SearchValue(ctx, "key")
+	if err != nil {
+		t.Fatalf("SearchValue returned error: %v", err)
+	}
+	val := <-ch
+	if string(val) != "from-pubsub" {
+		t.Fatalf("got %q, want %q", val, "from-pubsub")
+	}
+}
+
+func TestPubsubFirstRouting_SearchValue_BothEmpty_Timeout(t *testing.T) {
+	pubsubCh := make(chan []byte)
+
+	pubsub := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return pubsubCh, nil
+		},
+	}
+
+	dhtCh := make(chan []byte)
+
+	dht := &mockValueStore{
+		searchValueFn: func(_ context.Context, _ string, _ ...routing.Option) (<-chan []byte, error) {
+			return dhtCh, nil
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	r := newPubsubFirstRouting(pubsub, dht)
+	ch, err := r.SearchValue(ctx, "key")
+	if err != nil {
+		t.Fatalf("SearchValue returned error: %v", err)
+	}
+
+	_, ok := <-ch
+	if ok {
+		t.Error("expected channel to close on context timeout without data")
 	}
 }

@@ -60,6 +60,25 @@ func (s *StaleWhileRevalidateNameSystem) EnableWatch() {
 	s.watchEnabled = true
 }
 
+func (s *StaleWhileRevalidateNameSystem) WarmSubscriptions() {
+	if !s.watchEnabled {
+		return
+	}
+
+	keys := s.store.Keys()
+	if len(keys) == 0 {
+		return
+	}
+
+	s.logger.Info("warming pubsub subscriptions from cached IPNS entries",
+		zap.Int("count", len(keys)),
+	)
+
+	for _, key := range keys {
+		s.startWatcher(key)
+	}
+}
+
 func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
 	if se, ok := s.store.GetStale(p.String()); ok {
 		age := time.Since(se.cachedAt)
