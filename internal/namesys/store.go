@@ -94,6 +94,10 @@ func (s *IPNSStore) SetOnEvict(fn EvictFunc) {
 	s.onEvict = fn
 }
 
+func (s *IPNSStore) Keys() []string {
+	return s.stale.Keys()
+}
+
 func (s *IPNSStore) loadStaleFromDisk(ctx context.Context) error {
 	results, err := s.staleDS.Query(ctx, dsq.Query{Prefix: "/"})
 	if err != nil {
