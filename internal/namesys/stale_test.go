@@ -68,6 +68,68 @@ func newTestStore(t *testing.T) *IPNSStore {
 	return store
 }
 
+func TestResolvableKey_NormalizesSubpaths(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"/ipns/12D3KooWabc", "/ipns/12D3KooWabc"},
+		{"/ipns/12D3KooWabc/assets/style.css", "/ipns/12D3KooWabc"},
+		{"/ipns/12D3KooWabc/deep/nested/path.js", "/ipns/12D3KooWabc"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			p := newPath(t, tt.input)
+			got := resolvableKey(p)
+			if got != tt.expected {
+				t.Errorf("resolvableKey(%s) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestResolve_SubpathsShareCacheEntry(t *testing.T) {
+	var resolveCall atomic.Int32
+	resolvedPath := newPath(t, "/ipns/12D3KooWabc")
+
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			resolveCall.Add(1)
+			return namesys.Result{Path: resolvedPath, TTL: time.Minute}, nil
+		},
+	}
+
+	store := newTestStore(t)
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	subPath := newPath(t, "/ipns/12D3KooWabc/assets/style.css")
+	result, err := sut.Resolve(context.Background(), subPath)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Path.String() != resolvedPath.String() {
+		t.Errorf("expected resolved path %s, got %s", resolvedPath.String(), result.Path.String())
+	}
+	if resolveCall.Load() != 1 {
+		t.Fatalf("expected 1 inner resolve call, got %d", resolveCall.Load())
+	}
+
+	anotherSubPath := newPath(t, "/ipns/12D3KooWabc/deep/nested.js")
+	result2, err := sut.Resolve(context.Background(), anotherSubPath)
+	if err != nil {
+		t.Fatalf("expected no error on second sub-path, got %v", err)
+	}
+	if result2.Path.String() != resolvedPath.String() {
+		t.Errorf("expected resolved path %s, got %s", resolvedPath.String(), result2.Path.String())
+	}
+	if resolveCall.Load() != 1 {
+		t.Errorf("sub-path should hit cache, expected 1 total resolve call, got %d", resolveCall.Load())
+	}
+
+	sut.Stop()
+}
+
 func TestResolve_CacheHit_ReturnsFresh(t *testing.T) {
 	mock := &mockNameSystem{}
 	store := newTestStore(t)

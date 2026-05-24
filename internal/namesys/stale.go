@@ -17,6 +17,18 @@ var (
 	errNoResult = errors.New("no IPNS resolution result")
 )
 
+func resolvableKey(p path.Path) string {
+	segments := p.Segments()
+	if len(segments) >= 2 {
+		rp, err := path.NewPathFromSegments(segments[0], segments[1])
+		if err == nil {
+			return rp.String()
+		}
+	}
+	return p.String()
+}
+
+
 type staleEntry struct {
 	result   namesys.Result
 	cachedAt time.Time
@@ -80,17 +92,19 @@ func (s *StaleWhileRevalidateNameSystem) WarmSubscriptions() {
 }
 
 func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
-	if se, ok := s.store.GetStale(p.String()); ok {
+	key := resolvableKey(p)
+
+	if se, ok := s.store.GetStale(key); ok {
 		age := time.Since(se.cachedAt)
 		if age < s.store.freshTTL {
 			s.logger.Debug("cache hit, serving fresh entry",
-				zap.String("path", p.String()),
+				zap.String("key", key),
 				zap.Duration("age", age),
 			)
 			return se.result, nil
 		}
 		s.logger.Debug("cache hit, serving stale entry, revalidating in background",
-			zap.String("path", p.String()),
+			zap.String("key", key),
 			zap.Duration("age", age),
 		)
 		s.revalidate(p, opts)
@@ -98,7 +112,7 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 	}
 
 	s.logger.Debug("cache miss, delegating to inner Resolve",
-		zap.String("path", p.String()),
+		zap.String("key", key),
 		zap.Duration("timeout", s.store.timeout),
 		zap.Bool("ctx_done", ctx.Err() != nil),
 	)
@@ -120,10 +134,10 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 	case outcome := <-resolveCh:
 		elapsed := time.Since(start)
 		if outcome.err == nil {
-			s.store.PutStale(p.String(), staleEntry{result: outcome.result, cachedAt: time.Now()})
-			s.startWatcher(p.String())
+			s.store.PutStale(key, staleEntry{result: outcome.result, cachedAt: time.Now()})
+			s.startWatcher(key)
 			s.logger.Debug("resolve succeeded",
-				zap.String("path", p.String()),
+				zap.String("key", key),
 				zap.Duration("elapsed", elapsed),
 				zap.Duration("ttl", outcome.result.TTL),
 				zap.String("resolved_path", outcome.result.Path.String()),
@@ -132,7 +146,7 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 		}
 
 		s.logger.Debug("resolve failed, no stale fallback",
-			zap.String("path", p.String()),
+			zap.String("key", key),
 			zap.Duration("elapsed", elapsed),
 			zap.Error(outcome.err),
 		)
@@ -140,7 +154,7 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 
 	case <-time.After(timeout):
 		s.logger.Debug("resolve timed out, no stale fallback",
-			zap.String("path", p.String()),
+			zap.String("key", key),
 			zap.Duration("timeout", timeout),
 		)
 		return namesys.Result{}, context.DeadlineExceeded
@@ -148,11 +162,13 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 }
 
 func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) <-chan namesys.AsyncResult {
-	if se, ok := s.store.GetStale(p.String()); ok {
+	key := resolvableKey(p)
+
+	if se, ok := s.store.GetStale(key); ok {
 		age := time.Since(se.cachedAt)
 		if age < s.store.freshTTL {
 			s.logger.Debug("cache hit, serving fresh async entry",
-				zap.String("path", p.String()),
+				zap.String("key", key),
 				zap.Duration("age", age),
 			)
 			ch := make(chan namesys.AsyncResult, 1)
@@ -161,7 +177,7 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 			return ch
 		}
 		s.logger.Debug("cache hit, serving stale async entry, revalidating in background",
-			zap.String("path", p.String()),
+			zap.String("key", key),
 			zap.Duration("age", age),
 		)
 		s.revalidate(p, opts)
@@ -172,7 +188,7 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 	}
 
 	s.logger.Debug("cache miss, delegating to inner ResolveAsync",
-		zap.String("path", p.String()),
+		zap.String("key", key),
 		zap.Duration("timeout", s.store.timeout),
 	)
 
@@ -194,7 +210,7 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 			if res.Err != nil {
 				lastErr = res.Err
 				s.logger.Debug("async result error from inner",
-					zap.String("path", p.String()),
+					zap.String("key", key),
 					zap.Error(res.Err),
 				)
 				continue
@@ -205,7 +221,7 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 
 		elapsed := time.Since(start)
 		if hadResult {
-			s.store.PutStale(p.String(), staleEntry{
+			s.store.PutStale(key, staleEntry{
 				result: namesys.Result{
 					Path:    best.Path,
 					TTL:     best.TTL,
@@ -213,16 +229,16 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 				},
 				cachedAt: time.Now(),
 			})
-			s.startWatcher(p.String())
+			s.startWatcher(key)
 			s.logger.Debug("async resolve succeeded",
-				zap.String("path", p.String()),
+				zap.String("key", key),
 				zap.Duration("elapsed", elapsed),
 				zap.String("resolved_path", best.Path.String()),
 			)
 			ch <- best
 		} else {
 			s.logger.Debug("async resolve failed, no stale fallback",
-				zap.String("path", p.String()),
+				zap.String("key", key),
 				zap.Duration("elapsed", elapsed),
 				zap.Error(lastErr),
 			)
@@ -248,7 +264,7 @@ func (s *StaleWhileRevalidateNameSystem) Stop() {
 }
 
 func (s *StaleWhileRevalidateNameSystem) revalidate(p path.Path, opts []namesys.ResolveOption) {
-	key := p.String()
+	key := resolvableKey(p)
 	if _, pending := s.pending.LoadOrStore(key, struct{}{}); pending {
 		return
 	}
@@ -264,7 +280,7 @@ func (s *StaleWhileRevalidateNameSystem) revalidate(p path.Path, opts []namesys.
 		elapsed := time.Since(start)
 		if err != nil {
 			s.logger.Debug("revalidation failed",
-				zap.String("path", p.String()),
+				zap.String("key", key),
 				zap.Duration("elapsed", elapsed),
 				zap.Error(err),
 			)
@@ -274,7 +290,7 @@ func (s *StaleWhileRevalidateNameSystem) revalidate(p path.Path, opts []namesys.
 		s.store.PutStale(key, staleEntry{result: result, cachedAt: time.Now()})
 		s.startWatcher(key)
 		s.logger.Debug("revalidation succeeded",
-			zap.String("path", p.String()),
+			zap.String("key", key),
 			zap.Duration("elapsed", elapsed),
 			zap.String("resolved_path", result.Path.String()),
 		)
