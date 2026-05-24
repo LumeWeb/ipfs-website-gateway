@@ -5,6 +5,7 @@ import (
 	"context"
 	_ "embed"
 	"errors"
+	"fmt"
 	"html/template"
 	"net"
 	"net/http"
@@ -62,7 +63,12 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 		valueStore = routinghelpers.Null{}
 	}
 
-	ipnsStore, err := stalenamesys.NewIPNSStore(ipnsCachePath, ipnsFreshTTL, retrievalTimeout, ipnsCacheSize, logger)
+	nsLogger := logger.Named("namesys")
+	nsLogger.Debug("valueStore initialized",
+		zap.String("type", fmt.Sprintf("%T", valueStore)),
+	)
+
+	ipnsStore, err := stalenamesys.NewIPNSStore(ipnsCachePath, ipnsFreshTTL, retrievalTimeout, ipnsCacheSize, nsLogger)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +90,14 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 		return nil, err
 	}
 
-	wrappedNameSystem := stalenamesys.NewStaleWhileRevalidateNameSystem(nameSystem, ipnsStore, 4, logger)
+	nsLogger.Debug("boxo namesys created",
+		zap.String("valueStore_type", fmt.Sprintf("%T", valueStore)),
+		zap.Int("cache_size", ipnsCacheSize),
+		zap.Duration("max_cache_ttl", ipnsFreshTTL),
+		zap.Bool("pubsub_enabled", pubsubEnabled),
+	)
+
+	wrappedNameSystem := stalenamesys.NewStaleWhileRevalidateNameSystem(nameSystem, ipnsStore, 4, nsLogger)
 	if pubsubEnabled {
 		wrappedNameSystem.EnableWatch()
 		wrappedNameSystem.WarmSubscriptions()
