@@ -766,3 +766,64 @@ func TestResolve_TimesOut_NoStale_ReturnsError(t *testing.T) {
 	}
 	sut.Stop()
 }
+
+func TestStripSubPath_PreservesBasePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"base only", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu"},
+		{"sub-path file", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/assets/style.css", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu"},
+		{"deep sub-path", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/_astro/client.DILYMSZH.js", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu"},
+		{"trailing slash", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/assets/", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newPath(t, tt.input)
+			result := stripSubPath(namesys.Result{Path: p, TTL: time.Minute})
+			if result.Path.String() != tt.expected {
+				t.Errorf("stripSubPath(%s) = %q, want %q", tt.input, result.Path.String(), tt.expected)
+			}
+		})
+	}
+}
+
+func TestWithSubPath_ReconstructsCorrectly(t *testing.T) {
+	base := newPath(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu")
+	cached := namesys.Result{Path: base, TTL: time.Minute}
+
+	tests := []struct {
+		name     string
+		original string
+		expected string
+	}{
+		{"base path", "/ipns/12D3KooWabc", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu"},
+		{"sub-path file", "/ipns/12D3KooWabc/assets/style.css", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/assets/style.css"},
+		{"deep sub-path", "/ipns/12D3KooWabc/_astro/client.DILYMSZH.js", "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/_astro/client.DILYMSZH.js"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := newPath(t, tt.original)
+			result := withSubPath(cached, original)
+			if result.Path.String() != tt.expected {
+				t.Errorf("withSubPath(base, %s) = %q, want %q", tt.original, result.Path.String(), tt.expected)
+			}
+		})
+	}
+}
+
+func TestWithSubPath_FilePathNoTrailingSlash(t *testing.T) {
+	base := newPath(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu")
+	cached := namesys.Result{Path: base, TTL: time.Minute}
+
+	fileSubPath := newPath(t, "/ipns/12D3KooWabc/_astro/index.C3pJtvjs.css")
+	result := withSubPath(cached, fileSubPath)
+
+	resultStr := result.Path.String()
+	if resultStr[len(resultStr)-1] == '/' {
+		t.Errorf("withSubPath produced trailing slash on file path: %s (Boxo treats trailing-slash paths as directories)", resultStr)
+	}
+}
