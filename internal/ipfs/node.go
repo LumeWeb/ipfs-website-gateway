@@ -10,6 +10,7 @@ import (
 
 	"github.com/decred/go-bip39"
 	"github.com/ipfs/boxo/bitswap"
+	"github.com/ipfs/boxo/bitswap/client"
 	"github.com/ipfs/boxo/bitswap/network/bsnet"
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
@@ -59,7 +60,7 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 		logger: logger.Named("ipfs"),
 	}
 
-	host, err := node.initHost(nodeCtx, seed)
+	host, err := node.initHost(seed)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to initialize libp2p host: %w", err)
@@ -93,10 +94,24 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 
 	bsnetInstance := bsnet.NewFromIpfsHost(host)
 
-	// Bitswap gets content routing (fixes nil bug!)
-	bswapInstance := bitswap.New(nodeCtx, bsnetInstance, contentRouting, bs, bitswap.WithServerEnabled(false))
+	bswapTracer := newDebugTracer(node.logger)
+	var bswapOpts []bitswap.Option
+	bswapOpts = append(bswapOpts,
+		bitswap.WithServerEnabled(false),
+		bitswap.WithTracer(bswapTracer),
+	)
+	if node.logger.Core().Enabled(zap.DebugLevel) {
+		bswapOpts = append(bswapOpts, bitswap.WithClientOption(client.WithTraceBlock(true)))
+	}
 
-	node.BlockService = blockservice.New(bs, bswapInstance)
+	bswapInstance := bitswap.New(nodeCtx, bsnetInstance, contentRouting, bs, bswapOpts...)
+
+	innerBS := blockservice.New(bs, bswapInstance)
+	if node.logger.Core().Enabled(zap.DebugLevel) {
+		node.BlockService = newLoggingBlockService(innerBS, node.logger)
+	} else {
+		node.BlockService = innerBS
+	}
 
 	if pubsubEnabled {
 		gs, err := pubsub.NewGossipSub(nodeCtx, host,
@@ -158,7 +173,7 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 	return node, nil
 }
 
-func (n *Node) initHost(ctx context.Context, seed string) (host.Host, error) {
+func (n *Node) initHost(seed string) (host.Host, error) {
 	derivedSeed := bip39.NewSeed(seed, "")
 	privKey, _, err := crypto.GenerateEd25519Key(bytes.NewReader(derivedSeed))
 	if err != nil {
