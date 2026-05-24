@@ -89,14 +89,65 @@ func TestResolvableKey_NormalizesSubpaths(t *testing.T) {
 	}
 }
 
+func TestJoinSubPath_AppendsRemaining(t *testing.T) {
+	base := newPath(t, "/ipns/12D3KooWabc")
+
+	joined, err := joinSubPath(base, newPath(t, "/ipns/12D3KooWabc/assets/style.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined.String() != "/ipns/12D3KooWabc/assets/style.css" {
+		t.Errorf("got %s", joined.String())
+	}
+
+	joined2, err := joinSubPath(base, newPath(t, "/ipns/12D3KooWabc/deep/nested.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined2.String() != "/ipns/12D3KooWabc/deep/nested.js" {
+		t.Errorf("got %s", joined2.String())
+	}
+
+	joined3, err := joinSubPath(base, newPath(t, "/ipns/12D3KooWabc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined3.String() != "/ipns/12D3KooWabc" {
+		t.Errorf("base-only should return base, got %s", joined3.String())
+	}
+}
+
+func TestStripSubPath_TruncatesToBase(t *testing.T) {
+	result := namesys.Result{Path: newPath(t, "/ipns/12D3KooWabc/assets/style.css"), TTL: time.Minute}
+
+	stripped := stripSubPath(result, "/ipns/12D3KooWabc")
+	if stripped.Path.String() != "/ipns/12D3KooWabc" {
+		t.Errorf("expected base path, got %s", stripped.Path.String())
+	}
+
+	result2 := namesys.Result{Path: newPath(t, "/ipns/12D3KooWabc"), TTL: time.Minute}
+	stripped2 := stripSubPath(result2, "/ipns/12D3KooWabc")
+	if stripped2.Path.String() != "/ipns/12D3KooWabc" {
+		t.Errorf("already-base should stay base, got %s", stripped2.Path.String())
+	}
+}
+
 func TestResolve_SubpathsShareCacheEntry(t *testing.T) {
 	var resolveCall atomic.Int32
-	resolvedPath := newPath(t, "/ipns/12D3KooWabc")
+	resolvedBase := newPath(t, "/ipns/12D3KooWabc")
 
 	mock := &mockNameSystem{
 		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
 			resolveCall.Add(1)
-			return namesys.Result{Path: resolvedPath, TTL: time.Minute}, nil
+			segments := req.Segments()
+			if len(segments) > 2 {
+				joined, err := path.Join(resolvedBase, segments[2:]...)
+				if err != nil {
+					return namesys.Result{}, err
+				}
+				return namesys.Result{Path: joined, TTL: time.Minute}, nil
+			}
+			return namesys.Result{Path: resolvedBase, TTL: time.Minute}, nil
 		},
 	}
 
@@ -108,8 +159,9 @@ func TestResolve_SubpathsShareCacheEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.Path.String() != resolvedPath.String() {
-		t.Errorf("expected resolved path %s, got %s", resolvedPath.String(), result.Path.String())
+	expected := "/ipns/12D3KooWabc/assets/style.css"
+	if result.Path.String() != expected {
+		t.Errorf("first resolve: expected %s, got %s", expected, result.Path.String())
 	}
 	if resolveCall.Load() != 1 {
 		t.Fatalf("expected 1 inner resolve call, got %d", resolveCall.Load())
@@ -120,11 +172,24 @@ func TestResolve_SubpathsShareCacheEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected no error on second sub-path, got %v", err)
 	}
-	if result2.Path.String() != resolvedPath.String() {
-		t.Errorf("expected resolved path %s, got %s", resolvedPath.String(), result2.Path.String())
+	expected2 := "/ipns/12D3KooWabc/deep/nested.js"
+	if result2.Path.String() != expected2 {
+		t.Errorf("cache hit: expected %s, got %s", expected2, result2.Path.String())
 	}
 	if resolveCall.Load() != 1 {
 		t.Errorf("sub-path should hit cache, expected 1 total resolve call, got %d", resolveCall.Load())
+	}
+
+	baseOnly := newPath(t, "/ipns/12D3KooWabc")
+	result3, err := sut.Resolve(context.Background(), baseOnly)
+	if err != nil {
+		t.Fatalf("expected no error on base path, got %v", err)
+	}
+	if result3.Path.String() != "/ipns/12D3KooWabc" {
+		t.Errorf("base path: expected /ipns/12D3KooWabc, got %s", result3.Path.String())
+	}
+	if resolveCall.Load() != 1 {
+		t.Errorf("base path should also hit cache, expected 1 total resolve call, got %d", resolveCall.Load())
 	}
 
 	sut.Stop()

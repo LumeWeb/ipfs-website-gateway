@@ -28,6 +28,39 @@ func resolvableKey(p path.Path) string {
 	return p.String()
 }
 
+func joinSubPath(base path.Path, original path.Path) (path.Path, error) {
+	segments := original.Segments()
+	if len(segments) <= 2 {
+		return base, nil
+	}
+	return path.Join(base, segments[2:]...)
+}
+
+func withSubPath(result namesys.Result, original path.Path) (namesys.Result, error) {
+	joined, err := joinSubPath(result.Path, original)
+	if err != nil {
+		return result, err
+	}
+	result.Path = joined
+	return result, nil
+}
+
+func stripSubPath(result namesys.Result, key string) namesys.Result {
+	keyPath, err := path.NewPath(key)
+	if err != nil {
+		return result
+	}
+	keySegments := keyPath.Segments()
+	resolvedSegments := result.Path.Segments()
+	if len(keySegments) >= 2 && len(resolvedSegments) >= 2 {
+		baseOnly, err := path.NewPathFromSegments(resolvedSegments[0], resolvedSegments[1])
+		if err == nil {
+			result.Path = baseOnly
+		}
+	}
+	return result
+}
+
 
 type staleEntry struct {
 	result   namesys.Result
@@ -101,14 +134,14 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 				zap.String("key", key),
 				zap.Duration("age", age),
 			)
-			return se.result, nil
+			return withSubPath(se.result, p)
 		}
 		s.logger.Debug("cache hit, serving stale entry, revalidating in background",
 			zap.String("key", key),
 			zap.Duration("age", age),
 		)
 		s.revalidate(p, opts)
-		return se.result, nil
+		return withSubPath(se.result, p)
 	}
 
 	s.logger.Debug("cache miss, delegating to inner Resolve",
@@ -134,7 +167,8 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 	case outcome := <-resolveCh:
 		elapsed := time.Since(start)
 		if outcome.err == nil {
-			s.store.PutStale(key, staleEntry{result: outcome.result, cachedAt: time.Now()})
+			baseResult := stripSubPath(outcome.result, key)
+			s.store.PutStale(key, staleEntry{result: baseResult, cachedAt: time.Now()})
 			s.startWatcher(key)
 			s.logger.Debug("resolve succeeded",
 				zap.String("key", key),
@@ -166,13 +200,14 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 
 	if se, ok := s.store.GetStale(key); ok {
 		age := time.Since(se.cachedAt)
+		resolved, _ := withSubPath(se.result, p)
 		if age < s.store.freshTTL {
 			s.logger.Debug("cache hit, serving fresh async entry",
 				zap.String("key", key),
 				zap.Duration("age", age),
 			)
 			ch := make(chan namesys.AsyncResult, 1)
-			ch <- namesys.AsyncResult{Path: se.result.Path, TTL: se.result.TTL, LastMod: se.result.LastMod}
+			ch <- namesys.AsyncResult{Path: resolved.Path, TTL: resolved.TTL, LastMod: resolved.LastMod}
 			close(ch)
 			return ch
 		}
@@ -182,7 +217,7 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 		)
 		s.revalidate(p, opts)
 		ch := make(chan namesys.AsyncResult, 1)
-		ch <- namesys.AsyncResult{Path: se.result.Path, TTL: se.result.TTL, LastMod: se.result.LastMod}
+		ch <- namesys.AsyncResult{Path: resolved.Path, TTL: resolved.TTL, LastMod: resolved.LastMod}
 		close(ch)
 		return ch
 	}
@@ -221,12 +256,14 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 
 		elapsed := time.Since(start)
 		if hadResult {
+			baseResult := namesys.Result{
+				Path:    best.Path,
+				TTL:     best.TTL,
+				LastMod: best.LastMod,
+			}
+			baseResult = stripSubPath(baseResult, key)
 			s.store.PutStale(key, staleEntry{
-				result: namesys.Result{
-					Path:    best.Path,
-					TTL:     best.TTL,
-					LastMod: best.LastMod,
-				},
+				result:   baseResult,
 				cachedAt: time.Now(),
 			})
 			s.startWatcher(key)
@@ -287,7 +324,7 @@ func (s *StaleWhileRevalidateNameSystem) revalidate(p path.Path, opts []namesys.
 			return
 		}
 
-		s.store.PutStale(key, staleEntry{result: result, cachedAt: time.Now()})
+		s.store.PutStale(key, staleEntry{result: stripSubPath(result, key), cachedAt: time.Now()})
 		s.startWatcher(key)
 		s.logger.Debug("revalidation succeeded",
 			zap.String("key", key),
