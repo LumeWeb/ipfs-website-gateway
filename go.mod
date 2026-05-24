@@ -17,7 +17,8 @@ require (
 	github.com/ipfs/go-log/v2 v2.9.1
 	github.com/labstack/echo/v4 v4.12.0
 	github.com/libp2p/go-libp2p v0.47.0
-	github.com/libp2p/go-libp2p-kad-dht v0.38.0
+	github.com/libp2p/go-libp2p-pubsub v0.16.0
+	github.com/libp2p/go-libp2p-pubsub-router v0.6.0
 	github.com/libp2p/go-libp2p-routing-helpers v0.7.5
 	github.com/multiformats/go-multiaddr v0.16.1
 	github.com/multiformats/go-multiaddr-dns v0.5.0
@@ -101,9 +102,8 @@ require (
 	github.com/libp2p/go-doh-resolver v0.5.0 // indirect
 	github.com/libp2p/go-flow-metrics v0.3.0 // indirect
 	github.com/libp2p/go-libp2p-asn-util v0.4.1 // indirect
+	github.com/libp2p/go-libp2p-kad-dht v0.38.0 // indirect
 	github.com/libp2p/go-libp2p-kbucket v0.8.0 // indirect
-	github.com/libp2p/go-libp2p-pubsub v0.16.0 // indirect
-	github.com/libp2p/go-libp2p-pubsub-router v0.6.0 // indirect
 	github.com/libp2p/go-libp2p-record v0.3.1 // indirect
 	github.com/libp2p/go-msgio v0.3.0 // indirect
 	github.com/libp2p/go-netroute v0.4.0 // indirect
@@ -181,6 +181,7 @@ require (
 	go.etcd.io/etcd/client/v3 v3.6.7 // indirect
 	go.lumeweb.com/event/v2 v2.1.0 // indirect
 	go.lumeweb.com/ipfs-content v0.1.17 // indirect
+	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0 // indirect
 	go.opentelemetry.io/otel v1.40.0 // indirect
