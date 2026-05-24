@@ -10,6 +10,11 @@ import (
 	"go.uber.org/zap/zaptest"
 )
 
+// WARNING: This is a TEST seed for CI/CD purposes only.
+// This seed is INTENTIONALLY COMPROMISED and MUST NOT be used in production.
+// DO NOT use this seed for any real deployments or secure operations.
+const testSeed = "victory coin oven horn blade sausage large jungle differ talent coral jewel"
+
 func newTestBlockstore(t *testing.T) *cache.ContentBlockstore {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -25,7 +30,7 @@ func TestNewNode(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false)
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -52,7 +57,7 @@ func TestNewNodeWithRoutingEndpoint(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "https://api.pinner.xyz/routing/v1", bs, logger, false)
+	node, err := NewNode(ctx, "", 30*time.Second, "https://api.pinner.xyz/routing/v1", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode with routing endpoint failed: %v", err)
 	}
@@ -71,7 +76,7 @@ func TestNewNodeWithEmptyRoutingEndpoint(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false)
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -89,7 +94,7 @@ func TestNewNodeWithSeedPeer(t *testing.T) {
 
 	seedPeer := "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN"
 
-	node, err := NewNode(ctx, seedPeer, 30*time.Second, "", bs, logger, false)
+	node, err := NewNode(ctx, seedPeer, 30*time.Second, "", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode with seed peer failed: %v", err)
 	}
@@ -107,7 +112,7 @@ func TestNewNodeNilBlockstore(t *testing.T) {
 	ctx := context.Background()
 	logger := zaptest.NewLogger(t)
 
-	_, err := NewNode(ctx, "", 30*time.Second, "", nil, logger, false)
+	_, err := NewNode(ctx, "", 30*time.Second, "", nil, logger, false, testSeed)
 	if err == nil {
 		t.Error("Expected error for nil blockstore")
 	}
@@ -118,7 +123,7 @@ func TestNodeClose(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false)
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -138,7 +143,7 @@ func TestNodeCloseIdempotent(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false)
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -156,7 +161,7 @@ func TestNodePeerID(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false)
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -173,7 +178,7 @@ func TestNodeAddrs(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false)
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -196,7 +201,7 @@ func TestConnectedPeers(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false)
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -213,7 +218,7 @@ func TestConnectedPeersAfterClose(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false)
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode failed: %v", err)
 	}
@@ -233,7 +238,7 @@ func TestNewNodeWithPubsubAndRouting(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	bs := newTestBlockstore(t)
 
-	node, err := NewNode(ctx, "", 30*time.Second, "https://api.pinner.xyz/routing/v1", bs, logger, true)
+	node, err := NewNode(ctx, "", 30*time.Second, "https://api.pinner.xyz/routing/v1", bs, logger, true, testSeed)
 	if err != nil {
 		t.Fatalf("NewNode with pubsub and routing failed: %v", err)
 	}
@@ -257,7 +262,7 @@ func BenchmarkNewNode(b *testing.B) {
 		}
 		bs := cache.NewContentBlockstore(cc, zap.NewNop())
 
-		node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false)
+		node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
 		if err != nil {
 			b.Fatalf("NewNode failed: %v", err)
 		}

@@ -41,6 +41,7 @@ type IPFSConfig struct {
 	ConnectTimeout   time.Duration `config:"connect_timeout"`
 	RetrievalTimeout time.Duration `config:"retrieval_timeout"`
 	PubsubEnabled    bool          `config:"pubsub_enabled"`
+	Seed             string        `config:"seed"`
 }
 
 func (c IPFSConfig) RoutingEndpoint() string {
@@ -145,6 +146,7 @@ func (c IPFSConfig) Schema() zog.ZogSchema {
 		"SeedPeer":         zog.String().Optional(),
 		"ConnectTimeout":   zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 		"RetrievalTimeout": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"Seed": zog.String().Required(zog.Message("seed is required")),
 	})
 }
 
