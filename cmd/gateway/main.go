@@ -215,6 +215,8 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 			"unixfs",
 			"namesys",
 			"ipns",
+			"routing/http/client",
+			"routing/http/contentrouter",
 		}
 		for _, s := range subsystems {
 			_ = ipfslog.SetLogLevel(s, "debug")

@@ -49,7 +49,7 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 	node := &Node{
 		ctx:    nodeCtx,
 		cancel: cancel,
-		logger: logger,
+		logger: logger.Named("ipfs"),
 	}
 
 	host, err := node.initHost(nodeCtx)
@@ -68,12 +68,20 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 			drclient.WithProviderInfo(host.ID(), host.Addrs()),
 		)
 		if err != nil {
-			logger.Warn("failed to create HTTP routing client, routing will be unavailable", zap.Error(err))
+			node.logger.Warn("HTTP routing client creation failed, routing unavailable",
+				zap.String("endpoint", routingEndpoint),
+				zap.Error(err),
+			)
 		} else {
 			node.routingClient = cli
 			contentRouting = contentrouter.NewContentRoutingClient(cli)
-			logger.Info("HTTP routing client initialized", zap.String("endpoint", routingEndpoint))
+			node.logger.Info("HTTP routing client initialized",
+				zap.String("endpoint", routingEndpoint),
+				zap.String("peer_id", host.ID().String()),
+			)
 		}
+	} else {
+		node.logger.Warn("no routing endpoint configured, IPNS resolution will be unavailable")
 	}
 
 	bsnetInstance := bsnet.NewFromIpfsHost(host)
@@ -89,15 +97,15 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 			pubsub.WithStrictSignatureVerification(true),
 		)
 		if err != nil {
-			logger.Warn("failed to initialize gossipsub, continuing without pubsub", zap.Error(err))
+			node.logger.Warn("gossipsub initialization failed, continuing without pubsub", zap.Error(err))
 		} else {
 			pvs, err := pubsubrouter.NewPubsubValueStore(nodeCtx, host, gs, ipns.Validator{KeyBook: host.Peerstore()})
 			if err != nil {
-				logger.Warn("failed to initialize pubsub value store, continuing without pubsub", zap.Error(err))
+				node.logger.Warn("pubsub value store initialization failed, continuing without pubsub", zap.Error(err))
 			} else {
 				node.Pubsub = gs
 				node.pubsubValueStore = pvs
-				logger.Info("IPNS pubsub initialized")
+				node.logger.Info("pubsub value store initialized")
 			}
 		}
 	}
@@ -109,26 +117,34 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 		node.Routing = contentRouting.(routing.ValueStore)
 	}
 
+	node.logger.Info("routing configured",
+		zap.String("type", fmt.Sprintf("%T", node.Routing)),
+		zap.Bool("http_routing", contentRouting != nil),
+		zap.Bool("pubsub", node.pubsubValueStore != nil),
+	)
+
 	// Connect to seed peer for Bitswap block fetching
 	if seedPeer != "" {
 		peerInfo, err := resolveSeedPeer(nodeCtx, seedPeer, connectTimeout)
 		if err != nil {
-			logger.Warn("failed to resolve seed peer", zap.String("peer", seedPeer), zap.Error(err))
+			node.logger.Warn("failed to resolve seed peer", zap.String("peer", seedPeer), zap.Error(err))
 		} else {
 			if err := node.Host.Connect(nodeCtx, *peerInfo); err != nil {
-				logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
+				node.logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
 			} else {
-				logger.Info("connected to seed peer", zap.String("peer_id", peerInfo.ID.String()))
+				node.logger.Info("connected to seed peer", zap.String("peer_id", peerInfo.ID.String()))
 				// Persist the seed peer connection
 				node.Host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
 			}
 		}
 	}
 
-	logger.Info("IPFS node initialized",
+	node.logger.Info("node initialized",
 		zap.String("peer_id", host.ID().String()),
+		zap.Int("addrs", len(host.Addrs())),
 		zap.Bool("pubsub", node.Pubsub != nil),
 		zap.Bool("http_routing", contentRouting != nil),
+		zap.String("routing_type", fmt.Sprintf("%T", node.Routing)),
 	)
 
 	return node, nil

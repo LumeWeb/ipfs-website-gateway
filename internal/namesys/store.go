@@ -64,7 +64,7 @@ func NewIPNSStore(cachePath string, freshTTL time.Duration, timeout time.Duratio
 		staleDS:  dsns.Wrap(ldb, ds.NewKey(stalePrefix)),
 		freshTTL: freshTTL,
 		timeout:  timeout,
-		logger:   logger,
+		logger:   logger.Named("ipns-store"),
 	}
 
 	staleCache, err := lru.NewWithEvict[string, staleEntry](maxSize, func(key string, _ staleEntry) {
@@ -78,6 +78,13 @@ func NewIPNSStore(cachePath string, freshTTL time.Duration, timeout time.Duratio
 	}
 
 	s.stale = staleCache
+
+	logger.Info("initialized",
+		zap.String("path", dbPath),
+		zap.Int("max_size", maxSize),
+		zap.Duration("fresh_ttl", freshTTL),
+		zap.Duration("timeout", timeout),
+	)
 
 	if err := s.loadStaleFromDisk(context.Background()); err != nil {
 		logger.Warn("failed to load stale entries from disk, starting fresh", zap.Error(err))
@@ -135,8 +142,8 @@ func (s *IPNSStore) loadStaleFromDisk(ctx context.Context) error {
 		loaded++
 	}
 
-	s.logger.Info("loaded stale IPNS entries from disk",
-		zap.Int("loaded", loaded),
+	s.logger.Info("loaded entries from disk",
+		zap.Int("count", loaded),
 	)
 
 	return nil
