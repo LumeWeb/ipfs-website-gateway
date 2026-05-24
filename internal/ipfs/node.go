@@ -133,8 +133,9 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 				node.logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
 			} else {
 				node.logger.Info("connected to seed peer", zap.String("peer_id", peerInfo.ID.String()))
-				// Persist the seed peer connection
 				node.Host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
+				node.Host.ConnManager().Protect(peerInfo.ID, "seed-peer")
+				node.Host.ConnManager().TagPeer(peerInfo.ID, "seed-peer", 100)
 			}
 		}
 	}
