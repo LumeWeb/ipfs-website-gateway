@@ -9,6 +9,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// WARNING: This is a TEST seed for CI/CD purposes only.
+// This seed is INTENTIONALLY COMPROMISED and MUST NOT be used in production.
+// DO NOT use this seed for any real deployments or secure operations.
+const testSeed = "victory coin oven horn blade sausage large jungle differ talent coral jewel"
+
+func setRequiredTestEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("GATEWAY__IPFS__SEED", testSeed)
+}
+
 func TestConfigStructs(t *testing.T) {
 	// Verify Config struct can be instantiated
 	cfg := Config{
@@ -154,6 +164,7 @@ func TestDefaultsInterface(t *testing.T) {
 }
 
 func TestManagerWithDefaults(t *testing.T) {
+	setRequiredTestEnv(t)
 	logger := zap.NewNop()
 
 	// Create manager with default config
@@ -205,6 +216,7 @@ func TestManagerWithDefaults(t *testing.T) {
 }
 
 func TestManagerWithConfigFile(t *testing.T) {
+	setRequiredTestEnv(t)
 	logger := zap.NewNop()
 
 	// Create a temporary config file
@@ -280,6 +292,8 @@ func TestManagerWithEnvironmentVariables(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			setRequiredTestEnv(t)
+
 			// Set env var
 			t.Setenv(tt.key, tt.value)
 
@@ -306,6 +320,7 @@ func TestManagerWithEnvironmentVariables(t *testing.T) {
 }
 
 func TestManagerEnvOverridesFile(t *testing.T) {
+	setRequiredTestEnv(t)
 	logger := zap.NewNop()
 
 	// Create a temporary config file
@@ -351,6 +366,7 @@ logging:
 }
 
 func TestManagerInitIdempotency(t *testing.T) {
+	setRequiredTestEnv(t)
 	logger := zap.NewNop()
 
 	mgr, err := NewManager(WithLogger(logger))
@@ -382,6 +398,7 @@ func TestManagerInitIdempotency(t *testing.T) {
 }
 
 func TestManagerSetLogger(t *testing.T) {
+	setRequiredTestEnv(t)
 	logger1 := zap.NewNop()
 	logger2 := zap.NewNop()
 

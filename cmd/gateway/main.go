@@ -227,7 +227,7 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 }
 
 func initIPFSNode(ctx context.Context, cfg *config.Config, bs *cache.ContentBlockstore, logger *zap.Logger) (*ipfs.Node, error) {
-	return ipfs.NewNode(ctx, cfg.IPFS.SeedPeer, cfg.IPFS.ConnectTimeout, cfg.IPFS.RoutingEndpoint(), bs, logger, cfg.IPFS.PubsubEnabled)
+	return ipfs.NewNode(ctx, cfg.IPFS.SeedPeer, cfg.IPFS.ConnectTimeout, cfg.IPFS.RoutingEndpoint(), bs, logger, cfg.IPFS.PubsubEnabled, cfg.IPFS.Seed)
 }
 
 func setupGracefulShutdown(ctx context.Context) {

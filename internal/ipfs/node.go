@@ -1,12 +1,14 @@
 package ipfs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/decred/go-bip39"
 	"github.com/ipfs/boxo/bitswap"
 	"github.com/ipfs/boxo/bitswap/network/bsnet"
 	"github.com/ipfs/boxo/blockservice"
@@ -16,6 +18,7 @@ import (
 	"github.com/ipfs/boxo/routing/http/contentrouter"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/libp2p/go-libp2p"
+	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
@@ -39,9 +42,13 @@ type Node struct {
 	logger           *zap.Logger
 }
 
-func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, routingEndpoint string, bs blockstore.Blockstore, logger *zap.Logger, pubsubEnabled bool) (*Node, error) {
+func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, routingEndpoint string, bs blockstore.Blockstore, logger *zap.Logger, pubsubEnabled bool, seed string) (*Node, error) {
 	if bs == nil {
 		return nil, fmt.Errorf("blockstore cannot be nil")
+	}
+
+	if !bip39.IsMnemonicValid(seed) {
+		return nil, fmt.Errorf("invalid BIP-39 mnemonic")
 	}
 
 	nodeCtx, cancel := context.WithCancel(ctx)
@@ -52,7 +59,7 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 		logger: logger.Named("ipfs"),
 	}
 
-	host, err := node.initHost(nodeCtx)
+	host, err := node.initHost(nodeCtx, seed)
 	if err != nil {
 		cancel()
 		return nil, fmt.Errorf("failed to initialize libp2p host: %w", err)
@@ -151,8 +158,15 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 	return node, nil
 }
 
-func (n *Node) initHost(ctx context.Context) (host.Host, error) {
+func (n *Node) initHost(ctx context.Context, seed string) (host.Host, error) {
+	derivedSeed := bip39.NewSeed(seed, "")
+	privKey, _, err := crypto.GenerateEd25519Key(bytes.NewReader(derivedSeed))
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive identity from seed: %w", err)
+	}
+
 	h, err := libp2p.New(
+		libp2p.Identity(privKey),
 		libp2p.UserAgent("ipfs-website-gateway/1.0.0"),
 		libp2p.DisableRelay(),
 		libp2p.EnableNATService(),

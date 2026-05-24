@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/Oudwins/zog v0.22.0
 	github.com/alexliesenfeld/health v0.8.1
+	github.com/decred/go-bip39 v0.0.0-20260116150921-614f19988adb
 	github.com/dnslink-std/go v0.6.0
 	github.com/gammazero/workerpool v1.2.1
 	github.com/hashicorp/golang-lru/v2 v2.0.7

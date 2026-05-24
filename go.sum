@@ -97,6 +97,8 @@ github.com/decred/dcrd/crypto/blake256 v1.1.0 h1:zPMNGQCm0g4QTY27fOCorQW7EryeQ/U
 github.com/decred/dcrd/crypto/blake256 v1.1.0/go.mod h1:2OfgNZ5wDpcsFmHmCK5gZTPcCXqlm2ArzUIkw9czNJo=
 github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 h1:NMZiJj8QnKe1LgsbDayM4UoHwbvwDRwnI3hwNaAHRnc=
 github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0/go.mod h1:ZXNYxsqcloTdSy/rNShjYzMhyjf0LaoftYK0p+A3h40=
+github.com/decred/go-bip39 v0.0.0-20260116150921-614f19988adb h1:vTm/voQVZQ/wDQMXbRaF4+4hvMLoA7j59jpAYRnuVVQ=
+github.com/decred/go-bip39 v0.0.0-20260116150921-614f19988adb/go.mod h1:zoIE/+qp6sgV6w9vHDJ7EdmTo/wI/XSIH1me63FqBto=
 github.com/dnslink-std/go v0.6.0 h1:i+5HdSFNrpKxozvyebtvUgjXdqm7SW35NWkO4mnxyjQ=
 github.com/dnslink-std/go v0.6.0/go.mod h1:LZoJk4C4PpPZdJhsfi3ADdOVz7teVr1q2MZTtRrCTLE=
 github.com/docker/go-units v0.5.0 h1:69rxXcBk27SvSaaxTtLh/8llcHD8vYHT7WSdRZ/jvr4=
