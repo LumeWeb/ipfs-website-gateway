@@ -671,3 +671,122 @@ func TestStripPort(t *testing.T) {
 		}
 	}
 }
+
+func TestIsSubResourceRequest(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		accept   string
+		expected bool
+	}{
+		{"css file", "/assets/style.css", "", true},
+		{"js file", "/assets/app.js", "", true},
+		{"mjs file", "/assets/module.mjs", "", true},
+		{"woff2 font", "/fonts/inter.woff2", "", true},
+		{"svg image", "/img/logo.svg", "", true},
+		{"png image", "/img/photo.png", "", true},
+		{"wasm", "/app.wasm", "", true},
+		{"html page", "/about", "text/html,application/xhtml+xml", false},
+		{"html page with css ext but html accept", "/style.css", "text/html", false},
+		{"root path", "/", "text/html", false},
+		{"no ext no accept", "/api/data", "", false},
+		{"json", "/data.json", "", true},
+		{"xml", "/feed.xml", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			if tt.accept != "" {
+				req.Header.Set("Accept", tt.accept)
+			}
+			if isSubResourceRequest(req) != tt.expected {
+				t.Errorf("isSubResourceRequest(%s, Accept=%s) = %v, want %v", tt.path, tt.accept, !tt.expected, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSubResourceErrorHandler_SwallowsErrorBody(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Length", "45")
+		w.WriteHeader(http.StatusGatewayTimeout)
+		w.Write([]byte("timeout occurred after finding 1 provider(s)"))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/_astro/index.abc123.css", nil)
+	rec := httptest.NewRecorder()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w = newSubResourceErrorHandler(w, r)
+		inner.ServeHTTP(w, r)
+	})
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status 504, got %d", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("expected empty body for sub-resource error, got %q", rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "" {
+		t.Errorf("expected Content-Type to be stripped for sub-resource error, got %q", ct)
+	}
+	if cl := rec.Header().Get("Content-Length"); cl != "" && cl != "0" {
+		t.Errorf("expected Content-Length to be stripped for sub-resource error, got %q", cl)
+	}
+}
+
+func TestSubResourceErrorHandler_PassesHTMLThrough(t *testing.T) {
+	body := "<html>error page</html>"
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.WriteHeader(http.StatusGatewayTimeout)
+		w.Write([]byte(body))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	rec := httptest.NewRecorder()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w = newSubResourceErrorHandler(w, r)
+		inner.ServeHTTP(w, r)
+	})
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusGatewayTimeout {
+		t.Errorf("expected status 504, got %d", rec.Code)
+	}
+	if rec.Body.String() != body {
+		t.Errorf("expected body %q for HTML request, got %q", body, rec.Body.String())
+	}
+}
+
+func TestSubResourceErrorHandler_PassesSuccessThrough(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("body { color: red; }"))
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
+	rec := httptest.NewRecorder()
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w = newSubResourceErrorHandler(w, r)
+		inner.ServeHTTP(w, r)
+	})
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", rec.Code)
+	}
+	if rec.Body.String() != "body { color: red; }" {
+		t.Errorf("expected CSS body, got %q", rec.Body.String())
+	}
+}

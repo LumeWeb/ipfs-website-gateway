@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	gopath "path"
 	"strings"
 	"time"
 
@@ -363,7 +364,7 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 			zap.String("original_path", originalPath),
 			zap.String("rewritten_path", r.URL.Path),
 		)
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(newSubResourceErrorHandler(w, r), r)
 	})
 }
 
@@ -414,4 +415,75 @@ func (m *AccessControlMiddleware) renderInvalidPage(w http.ResponseWriter, statu
 	}
 	w.WriteHeader(statusCode)
 	_, _ = buf.WriteTo(w)
+}
+
+// subResourceErrorHandler wraps http.ResponseWriter to intercept error
+// responses for sub-resource requests (CSS, JS, images, etc). When Boxo
+// fails to fetch a block, it returns text/plain error bodies that cause
+// browsers to report misleading MIME type errors for sub-resources. This
+// wrapper suppresses the error body for sub-resource requests, returning
+// only the status code so the browser shows a clean network error instead.
+type subResourceErrorHandler struct {
+	http.ResponseWriter
+	request    *http.Request
+	statusCode int
+	wroteHeader bool
+	bodyBuf    bytes.Buffer
+}
+
+func newSubResourceErrorHandler(w http.ResponseWriter, r *http.Request) *subResourceErrorHandler {
+	return &subResourceErrorHandler{
+		ResponseWriter: w,
+		request:        r,
+	}
+}
+
+func (s *subResourceErrorHandler) WriteHeader(code int) {
+	if s.wroteHeader {
+		return
+	}
+	s.statusCode = code
+	s.wroteHeader = true
+
+	if isSubResourceRequest(s.request) && code >= 400 {
+		s.Header().Del("Content-Length")
+		s.Header().Del("Content-Type")
+	}
+
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *subResourceErrorHandler) Write(p []byte) (int, error) {
+	if !s.wroteHeader {
+		s.WriteHeader(http.StatusOK)
+	}
+
+	if isSubResourceRequest(s.request) && s.statusCode >= 400 {
+		return len(p), nil
+	}
+
+	return s.ResponseWriter.Write(p)
+}
+
+func (s *subResourceErrorHandler) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func isSubResourceRequest(r *http.Request) bool {
+	accept := r.Header.Get("Accept")
+	if strings.Contains(accept, "text/html") {
+		return false
+	}
+
+	ext := strings.ToLower(gopath.Ext(r.URL.Path))
+	switch ext {
+	case ".css", ".js", ".mjs", ".woff", ".woff2", ".ttf",
+		".eot", ".otf", ".png", ".jpg", ".jpeg", ".gif",
+		".svg", ".ico", ".webp", ".avif", ".webm", ".mp4",
+		".wasm", ".json", ".xml":
+		return true
+	}
+	return false
 }
