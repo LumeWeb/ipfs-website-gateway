@@ -709,6 +709,8 @@ func TestIsSubResourceRequest(t *testing.T) {
 
 func TestSubResourceErrorHandler_SwallowsErrorBody(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Length", "45")
 		w.WriteHeader(http.StatusGatewayTimeout)
 		w.Write([]byte("timeout occurred after finding 1 provider(s)"))
 	})
@@ -728,6 +730,12 @@ func TestSubResourceErrorHandler_SwallowsErrorBody(t *testing.T) {
 	}
 	if rec.Body.Len() != 0 {
 		t.Errorf("expected empty body for sub-resource error, got %q", rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "" {
+		t.Errorf("expected Content-Type to be stripped for sub-resource error, got %q", ct)
+	}
+	if cl := rec.Header().Get("Content-Length"); cl != "" && cl != "0" {
+		t.Errorf("expected Content-Length to be stripped for sub-resource error, got %q", cl)
 	}
 }
 

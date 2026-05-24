@@ -445,9 +445,9 @@ func (s *subResourceErrorHandler) WriteHeader(code int) {
 	s.statusCode = code
 	s.wroteHeader = true
 
-	if !isSubResourceRequest(s.request) || code < 400 {
-		s.ResponseWriter.WriteHeader(code)
-		return
+	if isSubResourceRequest(s.request) && code >= 400 {
+		s.Header().Del("Content-Length")
+		s.Header().Del("Content-Type")
 	}
 
 	s.ResponseWriter.WriteHeader(code)
