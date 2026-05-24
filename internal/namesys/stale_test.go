@@ -89,42 +89,193 @@ func TestResolvableKey_NormalizesSubpaths(t *testing.T) {
 	}
 }
 
-func TestResolve_SubpathsShareCacheEntry(t *testing.T) {
-	var resolveCall atomic.Int32
-	resolvedPath := newPath(t, "/ipns/12D3KooWabc")
-
-	mock := &mockNameSystem{
+func makeBoxoMockResolver(t *testing.T, baseResolvedPath string, resolveCall *atomic.Int32) *mockNameSystem {
+	t.Helper()
+	baseResolved, _ := path.NewPath(baseResolvedPath)
+	return &mockNameSystem{
 		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
 			resolveCall.Add(1)
-			return namesys.Result{Path: resolvedPath, TTL: time.Minute}, nil
+			// Simulates Boxo namesys behavior: resolve base IPNS→IPFS, then append request sub-path segments
+			segments := req.Segments()
+			resolved := baseResolved.String()
+			if len(segments) > 2 {
+				for _, seg := range segments[2:] {
+					resolved += "/" + seg
+				}
+			}
+			p, err := path.NewPath(resolved)
+			if err != nil {
+				return namesys.Result{}, err
+			}
+			return namesys.Result{Path: p, TTL: time.Minute}, nil
 		},
 	}
+}
+
+// Verifies that sub-paths under the same peer ID share a cache entry (keyed on resolvable base path)
+// and each sub-path resolves to the correct DAG path instead of the first request's path.
+func TestResolve_SubpathsShareCacheEntry(t *testing.T) {
+	var resolveCall atomic.Int32
+	mock := makeBoxoMockResolver(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu", &resolveCall)
 
 	store := newTestStore(t)
 	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
 
+	// Cache miss: resolve /ipns/12D3KooWabc/assets/style.css
 	subPath := newPath(t, "/ipns/12D3KooWabc/assets/style.css")
 	result, err := sut.Resolve(context.Background(), subPath)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
-	if result.Path.String() != resolvedPath.String() {
-		t.Errorf("expected resolved path %s, got %s", resolvedPath.String(), result.Path.String())
+	expected1 := "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/assets/style.css"
+	if result.Path.String() != expected1 {
+		t.Errorf("first request: expected %s, got %s", expected1, result.Path.String())
 	}
 	if resolveCall.Load() != 1 {
 		t.Fatalf("expected 1 inner resolve call, got %d", resolveCall.Load())
 	}
 
+	// Cache hit: same peer ID, different sub-path — must resolve to /deep/nested.js, not /assets/style.css
 	anotherSubPath := newPath(t, "/ipns/12D3KooWabc/deep/nested.js")
 	result2, err := sut.Resolve(context.Background(), anotherSubPath)
 	if err != nil {
 		t.Fatalf("expected no error on second sub-path, got %v", err)
 	}
-	if result2.Path.String() != resolvedPath.String() {
-		t.Errorf("expected resolved path %s, got %s", resolvedPath.String(), result2.Path.String())
+	expected2 := "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/deep/nested.js"
+	if result2.Path.String() != expected2 {
+		t.Errorf("second request: expected %s, got %s", expected2, result2.Path.String())
 	}
 	if resolveCall.Load() != 1 {
 		t.Errorf("sub-path should hit cache, expected 1 total resolve call, got %d", resolveCall.Load())
+	}
+
+	sut.Stop()
+}
+
+// Verifies that stale cache hits reconstruct the correct sub-path instead of returning
+// the first request's resolved path (the production bug: /assets/style.css cached → /index.html returns /assets/style.css).
+func TestResolve_Subpaths_StaleCacheReconstructsCorrectly(t *testing.T) {
+	var resolveCall atomic.Int32
+	mock := makeBoxoMockResolver(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu", &resolveCall)
+
+	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	// Cache miss: populate with /assets/style.css
+	subPath1 := newPath(t, "/ipns/12D3KooWabc/assets/style.css")
+	result1, err := sut.Resolve(context.Background(), subPath1)
+	if err != nil {
+		t.Fatalf("first resolve: expected no error, got %v", err)
+	}
+	expected1 := "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/assets/style.css"
+	if result1.Path.String() != expected1 {
+		t.Errorf("first resolve: expected %s, got %s", expected1, result1.Path.String())
+	}
+
+	// Age the entry into the stale window
+	key := resolvableKey(subPath1)
+	if se, ok := store.GetStale(key); ok {
+		store.PutStale(key, staleEntry{result: se.result, cachedAt: time.Now().Add(-time.Minute)})
+	}
+
+	// Cache hit (stale): /index.html must resolve to .../index.html, not .../assets/style.css
+	subPath2 := newPath(t, "/ipns/12D3KooWabc/index.html")
+	result2, err := sut.Resolve(context.Background(), subPath2)
+	if err != nil {
+		t.Fatalf("second resolve: expected no error, got %v", err)
+	}
+	expected2 := "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/index.html"
+	if result2.Path.String() != expected2 {
+		t.Errorf("stale cache hit: expected %s, got %s", expected2, result2.Path.String())
+	}
+
+	if resolveCall.Load() != 1 {
+		t.Errorf("expected 1 inner resolve (stale cache hit), got %d", resolveCall.Load())
+	}
+
+	sut.Stop()
+}
+
+// Verifies that a base path resolve (no sub-path) populates the cache, and a subsequent
+// sub-path request hits the cache but reconstructs the resolved path with the sub-path appended.
+func TestResolve_BasePathThenSubpath(t *testing.T) {
+	var resolveCall atomic.Int32
+	mock := makeBoxoMockResolver(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu", &resolveCall)
+
+	store := newTestStore(t)
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	// Cache miss: resolve base path (homepage)
+	basePath := newPath(t, "/ipns/12D3KooWabc")
+	result1, err := sut.Resolve(context.Background(), basePath)
+	if err != nil {
+		t.Fatalf("base resolve: expected no error, got %v", err)
+	}
+	expected1 := "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu"
+	if result1.Path.String() != expected1 {
+		t.Errorf("base resolve: expected %s, got %s", expected1, result1.Path.String())
+	}
+	if resolveCall.Load() != 1 {
+		t.Fatalf("expected 1 inner resolve, got %d", resolveCall.Load())
+	}
+
+	// Cache hit: sub-path must reconstruct resolved path with /assets/style.css appended
+	subPath := newPath(t, "/ipns/12D3KooWabc/assets/style.css")
+	result2, err := sut.Resolve(context.Background(), subPath)
+	if err != nil {
+		t.Fatalf("sub-path resolve: expected no error, got %v", err)
+	}
+	expected2 := "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/assets/style.css"
+	if result2.Path.String() != expected2 {
+		t.Errorf("sub-path cache hit: expected %s, got %s", expected2, result2.Path.String())
+	}
+	if resolveCall.Load() != 1 {
+		t.Errorf("sub-path should hit cache, expected 1 total resolve, got %d", resolveCall.Load())
+	}
+
+	sut.Stop()
+}
+
+// Verifies that a sub-path resolve populates the cache, and a subsequent base path
+// request hits the cache and returns the base resolved path without the first request's sub-path.
+func TestResolve_SubpathThenBasePath(t *testing.T) {
+	var resolveCall atomic.Int32
+	mock := makeBoxoMockResolver(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu", &resolveCall)
+
+	store := newTestStore(t)
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+
+	// Cache miss: resolve sub-path first
+	subPath := newPath(t, "/ipns/12D3KooWabc/assets/style.css")
+	result1, err := sut.Resolve(context.Background(), subPath)
+	if err != nil {
+		t.Fatalf("sub-path resolve: expected no error, got %v", err)
+	}
+	expected1 := "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu/assets/style.css"
+	if result1.Path.String() != expected1 {
+		t.Errorf("sub-path resolve: expected %s, got %s", expected1, result1.Path.String())
+	}
+	if resolveCall.Load() != 1 {
+		t.Fatalf("expected 1 inner resolve, got %d", resolveCall.Load())
+	}
+
+	// Cache hit: base path must return base resolved path, not the first request's sub-path
+	basePath := newPath(t, "/ipns/12D3KooWabc")
+	result2, err := sut.Resolve(context.Background(), basePath)
+	if err != nil {
+		t.Fatalf("base resolve: expected no error, got %v", err)
+	}
+	expected2 := "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu"
+	if result2.Path.String() != expected2 {
+		t.Errorf("base cache hit: expected %s, got %s", expected2, result2.Path.String())
+	}
+	if resolveCall.Load() != 1 {
+		t.Errorf("base path should hit cache, expected 1 total resolve, got %d", resolveCall.Load())
 	}
 
 	sut.Stop()

@@ -28,6 +28,29 @@ func resolvableKey(p path.Path) string {
 	return p.String()
 }
 
+func stripSubPath(result namesys.Result) namesys.Result {
+	segments := result.Path.Segments()
+	if len(segments) <= 2 {
+		return result
+	}
+	base, err := path.NewPathFromSegments(segments[0], segments[1])
+	if err != nil {
+		return result
+	}
+	return namesys.Result{Path: base, TTL: result.TTL, LastMod: result.LastMod}
+}
+
+func withSubPath(result namesys.Result, original path.Path) namesys.Result {
+	segments := original.Segments()
+	if len(segments) <= 2 {
+		return result
+	}
+	joined, err := path.Join(result.Path, segments[2:]...)
+	if err != nil {
+		return result
+	}
+	return namesys.Result{Path: joined, TTL: result.TTL, LastMod: result.LastMod}
+}
 
 type staleEntry struct {
 	result   namesys.Result
@@ -101,14 +124,14 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 				zap.String("key", key),
 				zap.Duration("age", age),
 			)
-			return se.result, nil
+			return withSubPath(se.result, p), nil
 		}
 		s.logger.Debug("cache hit, serving stale entry, revalidating in background",
 			zap.String("key", key),
 			zap.Duration("age", age),
 		)
 		s.revalidate(p, opts)
-		return se.result, nil
+		return withSubPath(se.result, p), nil
 	}
 
 	s.logger.Debug("cache miss, delegating to inner Resolve",
@@ -134,7 +157,7 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 	case outcome := <-resolveCh:
 		elapsed := time.Since(start)
 		if outcome.err == nil {
-			s.store.PutStale(key, staleEntry{result: outcome.result, cachedAt: time.Now()})
+			s.store.PutStale(key, staleEntry{result: stripSubPath(outcome.result), cachedAt: time.Now()})
 			s.startWatcher(key)
 			s.logger.Debug("resolve succeeded",
 				zap.String("key", key),
@@ -171,8 +194,9 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 				zap.String("key", key),
 				zap.Duration("age", age),
 			)
+			resolved := withSubPath(se.result, p)
 			ch := make(chan namesys.AsyncResult, 1)
-			ch <- namesys.AsyncResult{Path: se.result.Path, TTL: se.result.TTL, LastMod: se.result.LastMod}
+			ch <- namesys.AsyncResult{Path: resolved.Path, TTL: resolved.TTL, LastMod: resolved.LastMod}
 			close(ch)
 			return ch
 		}
@@ -181,8 +205,9 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 			zap.Duration("age", age),
 		)
 		s.revalidate(p, opts)
+		resolved := withSubPath(se.result, p)
 		ch := make(chan namesys.AsyncResult, 1)
-		ch <- namesys.AsyncResult{Path: se.result.Path, TTL: se.result.TTL, LastMod: se.result.LastMod}
+		ch <- namesys.AsyncResult{Path: resolved.Path, TTL: resolved.TTL, LastMod: resolved.LastMod}
 		close(ch)
 		return ch
 	}
@@ -223,7 +248,7 @@ func (s *StaleWhileRevalidateNameSystem) ResolveAsync(ctx context.Context, p pat
 		if hadResult {
 			s.store.PutStale(key, staleEntry{
 				result: namesys.Result{
-					Path:    best.Path,
+					Path:    stripSubPath(namesys.Result{Path: best.Path, TTL: best.TTL, LastMod: best.LastMod}).Path,
 					TTL:     best.TTL,
 					LastMod: best.LastMod,
 				},
@@ -287,7 +312,7 @@ func (s *StaleWhileRevalidateNameSystem) revalidate(p path.Path, opts []namesys.
 			return
 		}
 
-		s.store.PutStale(key, staleEntry{result: result, cachedAt: time.Now()})
+		s.store.PutStale(key, staleEntry{result: stripSubPath(result), cachedAt: time.Now()})
 		s.startWatcher(key)
 		s.logger.Debug("revalidation succeeded",
 			zap.String("key", key),
