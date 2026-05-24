@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ipfs/boxo/bitswap"
@@ -13,12 +12,14 @@ import (
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
 	"github.com/ipfs/boxo/ipns"
+	drclient "github.com/ipfs/boxo/routing/http/client"
+	"github.com/ipfs/boxo/routing/http/contentrouter"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/routing"
-	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	pubsubrouter "github.com/libp2p/go-libp2p-pubsub-router"
 	madns "github.com/multiformats/go-multiaddr-dns"
@@ -27,71 +28,18 @@ import (
 )
 
 type Node struct {
-	Host              host.Host
-	BlockService      blockservice.BlockService
-	Routing           routing.ValueStore
-	Pubsub            *pubsub.PubSub
-	routing           *routingProxy
-	pubsubValueStore  *pubsubrouter.PubsubValueStore
-	ctx               context.Context
-	cancel            context.CancelFunc
-	logger            *zap.Logger
-	pubsubEnabled     bool
-
-	seedPeerRetry struct {
-		mu       sync.Mutex
-		stopCh   chan struct{}
-		running  bool
-		peer     string
-		timeout  time.Duration
-	}
+	Host             host.Host
+	BlockService     blockservice.BlockService
+	Routing          routing.ValueStore
+	Pubsub           *pubsub.PubSub
+	pubsubValueStore *pubsubrouter.PubsubValueStore
+	routingClient    *drclient.Client
+	ctx              context.Context
+	cancel           context.CancelFunc
+	logger           *zap.Logger
 }
 
-type routingProxy struct {
-	mu      sync.RWMutex
-	current routing.ValueStore
-}
-
-var _ routing.ValueStore = (*routingProxy)(nil)
-
-func (p *routingProxy) PutValue(ctx context.Context, key string, value []byte, opts ...routing.Option) error {
-	p.mu.RLock()
-	vs := p.current
-	p.mu.RUnlock()
-	return vs.PutValue(ctx, key, value, opts...)
-}
-
-func (p *routingProxy) GetValue(ctx context.Context, key string, opts ...routing.Option) ([]byte, error) {
-	p.mu.RLock()
-	vs := p.current
-	p.mu.RUnlock()
-	return vs.GetValue(ctx, key, opts...)
-}
-
-func (p *routingProxy) SearchValue(ctx context.Context, key string, opts ...routing.Option) (<-chan []byte, error) {
-	p.mu.RLock()
-	vs := p.current
-	p.mu.RUnlock()
-	return vs.SearchValue(ctx, key, opts...)
-}
-
-func (p *routingProxy) swap(vs routing.ValueStore) {
-	p.mu.Lock()
-	p.current = vs
-	p.mu.Unlock()
-}
-
-func (n *Node) swapRouting(dht routing.ValueStore) {
-	var vs routing.ValueStore
-	if n.pubsubValueStore != nil {
-		vs = newPubsubFirstRouting(n.pubsubValueStore, dht)
-	} else {
-		vs = dht
-	}
-	n.routing.swap(vs)
-}
-
-func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, bs blockstore.Blockstore, logger *zap.Logger, pubsubEnabled bool) (*Node, error) {
+func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, routingEndpoint string, bs blockstore.Blockstore, logger *zap.Logger, pubsubEnabled bool) (*Node, error) {
 	if bs == nil {
 		return nil, fmt.Errorf("blockstore cannot be nil")
 	}
@@ -99,13 +47,10 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 	nodeCtx, cancel := context.WithCancel(ctx)
 
 	node := &Node{
-		ctx:           nodeCtx,
-		cancel:        cancel,
-		logger:        logger,
-		routing:       &routingProxy{current: routinghelpers.Null{}},
-		pubsubEnabled: pubsubEnabled,
+		ctx:    nodeCtx,
+		cancel: cancel,
+		logger: logger,
 	}
-	node.Routing = node.routing
 
 	host, err := node.initHost(nodeCtx)
 	if err != nil {
@@ -115,9 +60,26 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 
 	node.Host = host
 
+	// Create HTTP routing client for content routing and IPNS resolution
+	var contentRouting routing.ContentRouting
+	if routingEndpoint != "" {
+		cli, err := drclient.New(
+			routingEndpoint,
+			drclient.WithProviderInfo(host.ID(), host.Addrs()),
+		)
+		if err != nil {
+			logger.Warn("failed to create HTTP routing client, routing will be unavailable", zap.Error(err))
+		} else {
+			node.routingClient = cli
+			contentRouting = contentrouter.NewContentRoutingClient(cli)
+			logger.Info("HTTP routing client initialized", zap.String("endpoint", routingEndpoint))
+		}
+	}
+
 	bsnetInstance := bsnet.NewFromIpfsHost(host)
 
-	bswapInstance := bitswap.New(nodeCtx, bsnetInstance, nil, bs, bitswap.WithServerEnabled(false))
+	// Bitswap gets content routing (fixes nil bug!)
+	bswapInstance := bitswap.New(nodeCtx, bsnetInstance, contentRouting, bs, bitswap.WithServerEnabled(false))
 
 	node.BlockService = blockservice.New(bs, bswapInstance)
 
@@ -140,7 +102,14 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 		}
 	}
 
-	var connected bool
+	// Set up routing: pubsub-first with HTTP routing fallback, or just HTTP routing
+	if node.pubsubValueStore != nil && contentRouting != nil {
+		node.Routing = newPubsubFirstRouting(node.pubsubValueStore, contentRouting.(routing.ValueStore))
+	} else if contentRouting != nil {
+		node.Routing = contentRouting.(routing.ValueStore)
+	}
+
+	// Connect to seed peer for Bitswap block fetching
 	if seedPeer != "" {
 		peerInfo, err := resolveSeedPeer(nodeCtx, seedPeer, connectTimeout)
 		if err != nil {
@@ -150,30 +119,16 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 				logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
 			} else {
 				logger.Info("connected to seed peer", zap.String("peer_id", peerInfo.ID.String()))
-				connected = true
+				// Persist the seed peer connection
+				node.Host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
 			}
 		}
-	}
-
-	if connected {
-		spr, err := newSeedPeerRouting(nodeCtx, host)
-		if err != nil {
-			logger.Warn("failed to initialize seed peer routing", zap.Error(err))
-		} else {
-			if err := spr.Bootstrap(nodeCtx); err != nil {
-				logger.Warn("failed to bootstrap DHT client", zap.Error(err))
-			}
-			node.swapRouting(spr)
-		}
-	}
-
-	if seedPeer != "" && !connected {
-		node.startSeedPeerRetry(seedPeer, connectTimeout)
 	}
 
 	logger.Info("IPFS node initialized",
 		zap.String("peer_id", host.ID().String()),
 		zap.Bool("pubsub", node.Pubsub != nil),
+		zap.Bool("http_routing", contentRouting != nil),
 	)
 
 	return node, nil
@@ -227,80 +182,8 @@ func resolveSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration
 	return peerInfo, nil
 }
 
-func (n *Node) startSeedPeerRetry(peer string, timeout time.Duration) {
-	n.seedPeerRetry.mu.Lock()
-	defer n.seedPeerRetry.mu.Unlock()
-
-	if n.seedPeerRetry.running {
-		return
-	}
-
-	n.seedPeerRetry.running = true
-	n.seedPeerRetry.peer = peer
-	n.seedPeerRetry.timeout = timeout
-	n.seedPeerRetry.stopCh = make(chan struct{})
-
-	go n.retrySeedPeerLoop()
-}
-
-func (n *Node) retrySeedPeerLoop() {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-n.ctx.Done():
-			return
-		case <-n.seedPeerRetry.stopCh:
-			return
-		case <-ticker.C:
-			peerInfo, err := resolveSeedPeer(n.ctx, n.seedPeerRetry.peer, n.seedPeerRetry.timeout)
-			if err != nil {
-				n.logger.Debug("seed peer retry: failed to resolve", zap.String("peer", n.seedPeerRetry.peer), zap.Error(err))
-				continue
-			}
-
-			if err := n.Host.Connect(n.ctx, *peerInfo); err != nil {
-				n.logger.Debug("seed peer retry: failed to connect", zap.String("peer", n.seedPeerRetry.peer), zap.Error(err))
-				continue
-			}
-
-			n.logger.Info("seed peer retry: connected", zap.String("peer_id", peerInfo.ID.String()))
-
-			spr, err := newSeedPeerRouting(n.ctx, n.Host)
-			if err != nil {
-				n.logger.Warn("seed peer retry: failed to initialize routing", zap.Error(err))
-				continue
-			}
-
-			if err := spr.Bootstrap(n.ctx); err != nil {
-				n.logger.Warn("seed peer retry: failed to bootstrap DHT", zap.Error(err))
-			}
-
-			n.seedPeerRetry.mu.Lock()
-			n.swapRouting(spr)
-			n.seedPeerRetry.running = false
-			n.seedPeerRetry.mu.Unlock()
-
-			return
-		}
-	}
-}
-
-func (n *Node) stopSeedPeerRetry() {
-	n.seedPeerRetry.mu.Lock()
-	defer n.seedPeerRetry.mu.Unlock()
-
-	if n.seedPeerRetry.running && n.seedPeerRetry.stopCh != nil {
-		close(n.seedPeerRetry.stopCh)
-		n.seedPeerRetry.running = false
-	}
-}
-
 func (n *Node) Close() error {
 	n.logger.Info("shutting down IPFS node")
-
-	n.stopSeedPeerRetry()
 
 	var errs []error
 
@@ -308,16 +191,12 @@ func (n *Node) Close() error {
 		n.cancel()
 	}
 
-	n.routing.mu.RLock()
-	routing := n.routing.current
-	n.routing.mu.RUnlock()
-
-	if routing != nil {
-		if closer, ok := routing.(io.Closer); ok {
-			if err := closer.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("failed to close routing: %w", err))
-			}
-		}
+	if n.routingClient != nil {
+		// The drclient.Client doesn't implement io.Closer directly,
+		// but its internal http.Client can be closed via its transport.
+		// For now, just nil the reference; the HTTP connections will be
+		// cleaned up when the process exits.
+		n.routingClient = nil
 	}
 
 	if n.Host != nil {

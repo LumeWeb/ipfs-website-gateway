@@ -1,7 +1,12 @@
 package config
 
 import (
+	"fmt"
+	"net/url"
+	"strings"
 	"time"
+
+	"github.com/multiformats/go-multiaddr"
 
 	"github.com/Oudwins/zog"
 )
@@ -36,6 +41,33 @@ type IPFSConfig struct {
 	ConnectTimeout   time.Duration `config:"connect_timeout"`
 	RetrievalTimeout time.Duration `config:"retrieval_timeout"`
 	PubsubEnabled    bool          `config:"pubsub_enabled"`
+}
+
+func (c IPFSConfig) RoutingEndpoint() string {
+	if c.SeedPeer == "" {
+		return ""
+	}
+
+	host := c.SeedPeer
+
+	if strings.HasPrefix(c.SeedPeer, "/") {
+		ma, err := multiaddr.NewMultiaddr(c.SeedPeer)
+		if err != nil {
+			return ""
+		}
+		for _, code := range []int{multiaddr.P_DNSADDR, multiaddr.P_DNS4, multiaddr.P_DNS6, multiaddr.P_DNS} {
+			if val, err := ma.ValueForProtocol(code); err == nil {
+				host = val
+				break
+			}
+		}
+	}
+
+	if u, err := url.Parse("//" + host); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	}
+
+	return fmt.Sprintf("https://%s/routing/v1", host)
 }
 
 // CacheConfig holds caching configuration settings for both status and content.
