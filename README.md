@@ -136,7 +136,7 @@ ipfs:
 cache:
   status_cache_ttl: 5m
   status_cache_lru_size: 1000
-  content_cache_path: /tmp/ipfs-cache
+  content_cache_path: /data/cache
   content_cache_max_bytes: 10737418240  # 10GB
   content_cache_lru_size: 100000
 
@@ -169,9 +169,11 @@ All configuration can be set via environment variables using the format `GATEWAY
 | `GATEWAY__IPFS__REPO_PATH` | IPFS repository path | `./data/ipfs` |
 | `GATEWAY__CACHE__STATUS_CACHE_TTL` | Status cache TTL | `5m` |
 | `GATEWAY__CACHE__STATUS_CACHE_LRU_SIZE` | Status cache size | `1000` |
-| `GATEWAY__CACHE__CONTENT_CACHE_PATH` | Content cache directory | `/tmp/ipfs-cache` |
+| `GATEWAY__CACHE__CONTENT_CACHE_PATH` | Content cache directory | `/data/cache` |
 | `GATEWAY__CACHE__CONTENT_CACHE_MAX_BYTES` | Content cache max size | `10737418240` (10GB) |
 | `GATEWAY__CACHE__CONTENT_CACHE_LRU_SIZE` | Content cache size | `100000` |
+| `GATEWAY__CACHE__IPNS_CACHE_PATH` | IPNS cache directory | `/data/ipns` |
+| `GATEWAY__CACHE__IPNS_CACHE_LRU_SIZE` | IPNS cache size | `140000` |
 | `GATEWAY__LOGGING__LEVEL` | Log level | `info` |
 | `GATEWAY__RATE_LIMIT__ENABLED` | Enable rate limiting on /allowed | `false` |
 | `GATEWAY__RATE_LIMIT__RATE` | Rate limit (requests/second) | `0.167` |

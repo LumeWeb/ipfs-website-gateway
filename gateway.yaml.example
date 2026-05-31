@@ -51,13 +51,18 @@ cache:
   # Maximum number of website statuses to keep in memory
   status_cache_lru_size: 1000
   
-  # Path to content cache directory (default: /tmp/ipfs-cache)
+  # Path to content cache directory (default: /data/cache)
   # This directory will be created if it doesn't exist
-  content_cache_path: ./data/cache
+  content_cache_path: /data/cache
   
   # Maximum size of content cache in bytes (default: 10737418240)
   # Set to 0 to disable content caching
   content_cache_max_bytes: 10737418240  # 10GB
+  content_cache_lru_size: 100000
+  
+  # Path to IPNS cache directory (default: /data/ipns)
+  # Stores LevelDB datastore for IPNS resolution records
+  # ipns_cache_path: /data/ipns
 
 # Logging configuration
 logging:

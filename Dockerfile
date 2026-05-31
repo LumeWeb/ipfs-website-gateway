@@ -21,27 +21,31 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -installsuffix cgo -ldflag
 # Runtime stage
 FROM alpine:latest
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata
+# Install runtime dependencies and su-exec for privilege dropping
+RUN apk --no-cache add ca-certificates tzdata su-exec
 
 # Create non-root user
 RUN addgroup -g 1000 gateway && \
     adduser -D -u 1000 -G gateway gateway
 
-# Create config directory and set ownership
-RUN mkdir -p /etc/lumeweb/gateway && \
-    chown -R gateway:gateway /etc/lumeweb
+# Create data directories with correct ownership
+RUN mkdir -p /data/cache /data/ipns /etc/lumeweb/gateway && \
+    chown -R gateway:gateway /data /etc/lumeweb
+
+# Declare data volumes (content cache + IPNS records)
+VOLUME ["/data/cache", "/data/ipns"]
 
 WORKDIR /app
 
 # Copy binary from builder
 COPY --from=builder /build/gateway /app/gateway
 
+# Copy entrypoint script
+COPY docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
 # Change ownership
 RUN chown -R gateway:gateway /app
-
-# Switch to non-root user
-USER gateway
 
 # Expose port
 EXPOSE 8080
@@ -50,5 +54,5 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD wget -q --spider http://localhost:8080/healthz || exit 1
 
-# Run the binary
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["/app/gateway"]
