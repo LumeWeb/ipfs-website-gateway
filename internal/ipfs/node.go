@@ -234,11 +234,15 @@ func resolveDNSRecursive(ctx context.Context, ma multiaddr.Multiaddr) ([]multiad
 		return nil, err
 	}
 
-	var result []multiaddr.Multiaddr
+	var (
+		result  []multiaddr.Multiaddr
+		lastErr error
+	)
 	for _, addr := range resolved {
 		if madns.Matches(addr) {
 			recursed, err := resolveDNSRecursive(ctx, addr)
 			if err != nil {
+				lastErr = err
 				continue
 			}
 			result = append(result, recursed...)
@@ -247,6 +251,9 @@ func resolveDNSRecursive(ctx context.Context, ma multiaddr.Multiaddr) ([]multiad
 		}
 	}
 
+	if len(result) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
 	return result, nil
 }
 
