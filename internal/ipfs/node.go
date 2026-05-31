@@ -209,7 +209,7 @@ func resolveSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration
 	defer cancel()
 
 	if madns.Matches(ma) {
-		resolved, err := madns.Resolve(ctx, ma)
+		resolved, err := resolveDNSRecursive(ctx, ma)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve dnsaddr: %w", err)
 		}
@@ -226,6 +226,35 @@ func resolveSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration
 	}
 
 	return peerInfo, nil
+}
+
+func resolveDNSRecursive(ctx context.Context, ma multiaddr.Multiaddr) ([]multiaddr.Multiaddr, error) {
+	resolved, err := madns.Resolve(ctx, ma)
+	if err != nil {
+		return nil, err
+	}
+
+	var (
+		result  []multiaddr.Multiaddr
+		lastErr error
+	)
+	for _, addr := range resolved {
+		if madns.Matches(addr) {
+			recursed, err := resolveDNSRecursive(ctx, addr)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			result = append(result, recursed...)
+		} else {
+			result = append(result, addr)
+		}
+	}
+
+	if len(result) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return result, nil
 }
 
 func (n *Node) Close() error {
