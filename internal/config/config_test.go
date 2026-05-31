@@ -145,8 +145,8 @@ func TestDefaultsInterface(t *testing.T) {
 	if cacheDefaults["StatusCacheLRUSize"] != 1000 {
 		t.Errorf("Expected default Cache.StatusCacheLRUSize to be 1000, got %v", cacheDefaults["StatusCacheLRUSize"])
 	}
-	if cacheDefaults["ContentCachePath"] != "/tmp/ipfs-cache" {
-		t.Errorf("Expected default Cache.ContentCachePath to be '/tmp/ipfs-cache', got %v", cacheDefaults["ContentCachePath"])
+	if cacheDefaults["ContentCachePath"] != "/data/cache" {
+		t.Errorf("Expected default Cache.ContentCachePath to be '/data/cache', got %v", cacheDefaults["ContentCachePath"])
 	}
 	if cacheDefaults["ContentCacheMaxBytes"] != int64(10)*1024*1024*1024 {
 		t.Errorf("Expected default Cache.ContentCacheMaxBytes to be 10GB, got %v", cacheDefaults["ContentCacheMaxBytes"])
@@ -201,8 +201,8 @@ func TestManagerWithDefaults(t *testing.T) {
 	if cfg.Cache.StatusCacheLRUSize != 1000 {
 		t.Errorf("Expected default StatusCacheLRUSize to be 1000, got %d", cfg.Cache.StatusCacheLRUSize)
 	}
-	if cfg.Cache.ContentCachePath != "/tmp/ipfs-cache" {
-		t.Errorf("Expected default ContentCachePath to be '/tmp/ipfs-cache', got '%s'", cfg.Cache.ContentCachePath)
+	if cfg.Cache.ContentCachePath != "/data/cache" {
+		t.Errorf("Expected default ContentCachePath to be '/data/cache', got '%s'", cfg.Cache.ContentCachePath)
 	}
 	if cfg.Cache.ContentCacheMaxBytes != int64(10)*1024*1024*1024 {
 		t.Errorf("Expected default ContentCacheMaxBytes to be 10GB, got %d", cfg.Cache.ContentCacheMaxBytes)

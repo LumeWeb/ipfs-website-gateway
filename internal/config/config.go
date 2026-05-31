@@ -156,12 +156,12 @@ func (c CacheConfig) Defaults() map[string]any {
 		"StatusCacheTTL":         5 * time.Minute,
 		"StatusCacheShortTTL":    30 * time.Second,
 		"StatusCacheLRUSize":     1000,
-		"ContentCachePath":     "/tmp/ipfs-cache",
+		"ContentCachePath":     "/data/cache",
 		"ContentCacheMaxBytes": int64(10) * 1024 * 1024 * 1024, // 10 GB
 		"ContentCacheLRUSize":  100000,
 		"IPNSCacheLRUSize":     140000,
 		"IPNSCacheFreshTTL":    30 * time.Second,
-		"IPNSCachePath":        "/tmp/ipfs-cache",
+		"IPNSCachePath":        "/data/ipns",
 	}
 }
 
