@@ -249,6 +249,146 @@ func TestNewNodeWithPubsubAndRouting(t *testing.T) {
 	}
 }
 
+func TestConnectSeedPeerNoAddr(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
+	if err != nil {
+		t.Fatalf("NewNode failed: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+
+	node.seedPeerAddr = ""
+	node.ConnectSeedPeer()
+
+	node.seedPeerMu.Lock()
+	active := node.seedPeerActive
+	node.seedPeerMu.Unlock()
+	if active {
+		t.Error("ConnectSeedPeer should not start worker when seed peer addr is empty")
+	}
+}
+
+func TestConnectSeedPeerIdempotent(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
+	if err != nil {
+		t.Fatalf("NewNode failed: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+
+	node.seedPeerAddr = "/dnsaddr/ipfs.pinner.xyz"
+	node.seedPeerConnectTimeout = 1 * time.Second
+	node.ConnectSeedPeer()
+	node.ConnectSeedPeer()
+
+	time.Sleep(50 * time.Millisecond)
+
+	node.seedPeerMu.Lock()
+	active := node.seedPeerActive
+	cancel := node.seedPeerCancel
+	node.seedPeerMu.Unlock()
+
+	if !active {
+		t.Error("expected worker to be active after ConnectSeedPeer")
+	}
+	if cancel == nil {
+		t.Error("expected cancel func to be set")
+	}
+
+	node.DisconnectSeedPeer()
+
+	node.seedPeerMu.Lock()
+	active = node.seedPeerActive
+	node.seedPeerMu.Unlock()
+
+	if active {
+		t.Error("expected worker to be inactive after DisconnectSeedPeer")
+	}
+}
+
+func TestDisconnectSeedPeerIdempotent(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
+	if err != nil {
+		t.Fatalf("NewNode failed: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+
+	node.DisconnectSeedPeer()
+	node.DisconnectSeedPeer()
+}
+
+func TestSeedPeerWorkerStopsOnClose(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	node, err := NewNode(ctx, "", 30*time.Second, "", bs, logger, false, testSeed)
+	if err != nil {
+		t.Fatalf("NewNode failed: %v", err)
+	}
+
+	node.seedPeerAddr = "/dnsaddr/ipfs.pinner.xyz"
+	node.seedPeerConnectTimeout = 1 * time.Second
+	node.ConnectSeedPeer()
+
+	time.Sleep(50 * time.Millisecond)
+
+	node.seedPeerMu.Lock()
+	activeBefore := node.seedPeerActive
+	node.seedPeerMu.Unlock()
+
+	if !activeBefore {
+		t.Error("expected worker to be active before Close")
+	}
+
+	_ = node.Close()
+
+	node.seedPeerMu.Lock()
+	activeAfter := node.seedPeerActive
+	node.seedPeerMu.Unlock()
+
+	if activeAfter {
+		t.Error("expected worker to be inactive after Close")
+	}
+}
+
+func TestNewNodeWithUnreachableSeedPeerUnblocks(t *testing.T) {
+	ctx := context.Background()
+	logger := zaptest.NewLogger(t)
+	bs := newTestBlockstore(t)
+
+	start := time.Now()
+	node, err := NewNode(ctx, "/dnsaddr/nonexistent.invalid/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN", 1*time.Second, "", bs, logger, false, testSeed)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("NewNode should not fail on unreachable seed peer: %v", err)
+	}
+	defer func() { _ = node.Close() }()
+
+	if elapsed > 5*time.Second {
+		t.Errorf("NewNode blocked too long (%v) — seed peer connect should not block boot", elapsed)
+	}
+
+	node.seedPeerMu.Lock()
+	active := node.seedPeerActive
+	node.seedPeerMu.Unlock()
+
+	if !active {
+		t.Error("expected reconnection worker to be active for unreachable seed peer")
+	}
+}
+
 func BenchmarkNewNode(b *testing.B) {
 	ctx := context.Background()
 	logger := zap.NewNop()
