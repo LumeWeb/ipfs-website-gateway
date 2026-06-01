@@ -78,12 +78,11 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 		namesys.WithDNSResolver(ns),
 		namesys.WithDatastore(ipnsStore.Datastore()),
 	}
-	if ipnsCacheSize > 0 {
-		namesysOpts = append(namesysOpts, namesys.WithCache(ipnsCacheSize))
-	}
-	if ipnsFreshTTL > 0 {
-		namesysOpts = append(namesysOpts, namesys.WithMaxCacheTTL(ipnsFreshTTL))
-	}
+	// NOTE: Boxo's internal LRU cache (WithCache/WithMaxCacheTTL) is intentionally
+	// omitted. StaleWhileRevalidateNameSystem provides its own caching layer via
+	// IPNSStore with stale-while-revalidate semantics. A separate Boxo LRU cache
+	// creates a shadow copy that can overwrite fresh pubsub updates during
+	// revalidation, causing 15-30s propagation delays.
 
 	nameSystem, err := namesys.NewNameSystem(valueStore, namesysOpts...)
 	if err != nil {
@@ -93,8 +92,8 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 
 	nsLogger.Debug("boxo namesys created",
 		zap.String("valueStore_type", fmt.Sprintf("%T", valueStore)),
-		zap.Int("cache_size", ipnsCacheSize),
-		zap.Duration("max_cache_ttl", ipnsFreshTTL),
+		zap.Int("ipns_store_lru_size", ipnsCacheSize),
+		zap.Duration("ipns_store_fresh_ttl", ipnsFreshTTL),
 		zap.Bool("pubsub_enabled", pubsubEnabled),
 	)
 
