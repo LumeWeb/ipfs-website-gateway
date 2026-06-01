@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/avast/retry-go/v5"
 	"github.com/decred/go-bip39"
 	"github.com/ipfs/boxo/bitswap"
 	"github.com/ipfs/boxo/bitswap/client"
@@ -41,6 +43,13 @@ type Node struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	logger           *zap.Logger
+
+	// Seed peer reconnection worker
+	seedPeerMu       sync.Mutex
+	seedPeerAddr     string
+	seedPeerCancel   context.CancelFunc // cancels the reconnection worker
+	seedPeerActive   bool               // true while worker goroutine is running
+	seedPeerConnectTimeout time.Duration
 }
 
 func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, routingEndpoint string, bs blockstore.Blockstore, logger *zap.Logger, pubsubEnabled bool, seed string) (*Node, error) {
@@ -147,19 +156,9 @@ func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration,
 
 	// Connect to seed peer for Bitswap block fetching
 	if seedPeer != "" {
-		peerInfo, err := resolveSeedPeer(nodeCtx, seedPeer, connectTimeout)
-		if err != nil {
-			node.logger.Warn("failed to resolve seed peer", zap.String("peer", seedPeer), zap.Error(err))
-		} else {
-			if err := node.Host.Connect(nodeCtx, *peerInfo); err != nil {
-				node.logger.Warn("failed to connect to seed peer", zap.String("peer", seedPeer), zap.Error(err))
-			} else {
-				node.logger.Info("connected to seed peer", zap.String("peer_id", peerInfo.ID.String()))
-				node.Host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
-				node.Host.ConnManager().Protect(peerInfo.ID, "seed-peer")
-				node.Host.ConnManager().TagPeer(peerInfo.ID, "seed-peer", 100)
-			}
-		}
+		node.seedPeerAddr = seedPeer
+		node.seedPeerConnectTimeout = connectTimeout
+		node.ConnectSeedPeer()
 	}
 
 	node.logger.Info("node initialized",
@@ -257,10 +256,83 @@ func resolveDNSRecursive(ctx context.Context, ma multiaddr.Multiaddr) ([]multiad
 	return result, nil
 }
 
+const (
+	seedPeerInitialBackoff = 1 * time.Second
+	seedPeerMaxBackoff     = 60 * time.Second
+)
+
+func (n *Node) seedPeerWorker(ctx context.Context) {
+	defer func() {
+		n.seedPeerMu.Lock()
+		n.seedPeerActive = false
+		n.seedPeerMu.Unlock()
+	}()
+
+	err := retry.New(
+		retry.Context(ctx),
+		retry.Attempts(0),
+		retry.Delay(seedPeerInitialBackoff),
+		retry.MaxDelay(seedPeerMaxBackoff),
+		retry.DelayType(retry.BackOffDelay),
+		retry.OnRetry(func(attempt uint, err error) {
+			n.logger.Warn("seed peer connect failed, retrying",
+				zap.String("peer", n.seedPeerAddr),
+				zap.Uint("attempt", attempt),
+				zap.Error(err),
+			)
+		}),
+	).Do(func() error {
+		peerInfo, err := resolveSeedPeer(ctx, n.seedPeerAddr, n.seedPeerConnectTimeout)
+		if err != nil {
+			return fmt.Errorf("resolve: %w", err)
+		}
+		if err := n.Host.Connect(ctx, *peerInfo); err != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
+		n.Host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
+		n.Host.ConnManager().Protect(peerInfo.ID, "seed-peer")
+		n.Host.ConnManager().TagPeer(peerInfo.ID, "seed-peer", 100)
+		n.logger.Info("connected to seed peer", zap.String("peer_id", peerInfo.ID.String()))
+		return nil
+	})
+	if err != nil && ctx.Err() == nil {
+		n.logger.Error("seed peer worker exited unexpectedly", zap.Error(err))
+	}
+}
+
+func (n *Node) ConnectSeedPeer() {
+	n.seedPeerMu.Lock()
+	defer n.seedPeerMu.Unlock()
+
+	if n.seedPeerAddr == "" || n.seedPeerActive {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(n.ctx)
+	n.seedPeerCancel = cancel
+	n.seedPeerActive = true
+
+	go n.seedPeerWorker(ctx)
+}
+
+func (n *Node) DisconnectSeedPeer() {
+	n.seedPeerMu.Lock()
+	cancel := n.seedPeerCancel
+	n.seedPeerCancel = nil
+	n.seedPeerActive = false
+	n.seedPeerMu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+}
+
 func (n *Node) Close() error {
 	n.logger.Info("shutting down IPFS node")
 
 	var errs []error
+
+	n.DisconnectSeedPeer()
 
 	if n.cancel != nil {
 		n.cancel()
