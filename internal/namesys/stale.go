@@ -372,6 +372,11 @@ func (s *StaleWhileRevalidateNameSystem) watchLoop(ctx context.Context, key stri
 			if res.Err != nil {
 				continue
 			}
+			newPath := stripSubPath(namesys.Result{Path: res.Path, TTL: res.TTL, LastMod: res.LastMod}).Path
+			if existing, ok := s.store.GetStale(key); ok && existing.result.Path.String() == newPath.String() {
+				ch = s.inner.ResolveAsync(ctx, p)
+				continue
+			}
 			s.store.PutStale(key, staleEntry{
 				result: namesys.Result{
 					Path:    res.Path,
@@ -382,6 +387,7 @@ func (s *StaleWhileRevalidateNameSystem) watchLoop(ctx context.Context, key stri
 			})
 			s.logger.Debug("pubsub cache update",
 				zap.String("path", key),
+				zap.String("new_path", newPath.String()),
 			)
 			ch = s.inner.ResolveAsync(ctx, p)
 		}
