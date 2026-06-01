@@ -1020,3 +1020,62 @@ func TestWatchLoop_PropagatesPubsubUpdate(t *testing.T) {
 		t.Errorf("expected TTL %v from pubsub update, got %v", 2*time.Minute, entry.result.TTL)
 	}
 }
+
+func TestWatchLoop_StripsSubPathBeforeStoringAndDeduplicating(t *testing.T) {
+	t.Parallel()
+
+	key := "/ipns/12D3KooWabc"
+	strippedA := newPath(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu")
+	subPathB := newPath(t, "/ipfs/bafybeiaq5sxjbozawwiqcji7m6srdtt75wnnh7mfpj7iwm75unvndi6kca/assets/style.css")
+	strippedB := newPath(t, "/ipfs/bafybeiaq5sxjbozawwiqcji7m6srdtt75wnnh7mfpj7iwm75unvndi6kca")
+
+	store := newTestStore(t)
+	store.PutStale(key, staleEntry{
+		result:   namesys.Result{Path: strippedA, TTL: time.Minute},
+		cachedAt: time.Now().Add(-time.Minute),
+	})
+
+	updated := make(chan struct{}, 1)
+	var callCount atomic.Int32
+	mock := &mockAsyncNameSystem{
+		resolveAsyncFn: func(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) <-chan namesys.AsyncResult {
+			n := callCount.Add(1)
+			ch := make(chan namesys.AsyncResult, 1)
+			if n == 1 {
+				ch <- namesys.AsyncResult{Path: subPathB, TTL: time.Minute}
+				close(ch)
+			} else {
+				ch <- namesys.AsyncResult{Path: subPathB, TTL: time.Minute}
+				close(ch)
+				select {
+				case updated <- struct{}{}:
+				default:
+				}
+			}
+			if n >= 3 {
+				<-ctx.Done()
+			}
+			return ch
+		},
+	}
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+	sut.EnableWatch()
+
+	sut.startWatcher(key)
+
+	select {
+	case <-updated:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for watchLoop to process sub-path update")
+	}
+	sut.Stop()
+
+	entry, ok := store.GetStale(key)
+	if !ok {
+		t.Fatal("expected stale entry to exist")
+	}
+	if entry.result.Path.String() != strippedB.String() {
+		t.Errorf("expected stripped path %s in store, got %s — sub-path was not stripped before PutStale", strippedB.String(), entry.result.Path.String())
+	}
+}
