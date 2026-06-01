@@ -194,11 +194,13 @@ func TestResolve_Subpaths_StaleCacheReconstructsCorrectly(t *testing.T) {
 		t.Errorf("stale cache hit: expected %s, got %s", expected2, result2.Path.String())
 	}
 
-	if resolveCall.Load() != 1 {
-		t.Errorf("expected 1 inner resolve (stale cache hit), got %d", resolveCall.Load())
-	}
-
 	sut.Stop()
+
+	// After Stop, background revalidation has drained. Count is 2:
+	// 1 from the initial cache miss + 1 from the stale-triggered background revalidation.
+	if got := resolveCall.Load(); got != 2 {
+		t.Errorf("expected 2 inner resolves (1 miss + 1 revalidation), got %d", got)
+	}
 }
 
 // Verifies that a base path resolve (no sub-path) populates the cache, and a subsequent
