@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"crypto/rand"
+
 	"github.com/avast/retry-go/v5"
 	"github.com/decred/go-bip39"
 	"github.com/ipfs/boxo/bitswap"
@@ -45,11 +47,13 @@ type Node struct {
 	logger           *zap.Logger
 
 	// Seed peer reconnection worker
-	seedPeerMu       sync.Mutex
-	seedPeerAddr     string
-	seedPeerCancel   context.CancelFunc // cancels the reconnection worker
-	seedPeerActive   bool               // true while worker goroutine is running
+	seedPeerMu             sync.Mutex
+	seedPeerAddr           string
+	seedPeerCancel         context.CancelFunc
+	seedPeerActive         bool
 	seedPeerConnectTimeout time.Duration
+	seedPeerWg             sync.WaitGroup
+	seedPeerWorkerID       [8]byte
 }
 
 func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, routingEndpoint string, bs blockstore.Blockstore, logger *zap.Logger, pubsubEnabled bool, seed string) (*Node, error) {
@@ -261,11 +265,15 @@ const (
 	seedPeerMaxBackoff     = 60 * time.Second
 )
 
-func (n *Node) seedPeerWorker(ctx context.Context) {
+func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
 	defer func() {
 		n.seedPeerMu.Lock()
-		n.seedPeerActive = false
+		if n.seedPeerWorkerID == workerID {
+			n.seedPeerActive = false
+			n.seedPeerCancel = nil
+		}
 		n.seedPeerMu.Unlock()
+		n.seedPeerWg.Done()
 	}()
 
 	err := retry.New(
@@ -311,8 +319,18 @@ func (n *Node) ConnectSeedPeer() {
 	ctx, cancel := context.WithCancel(n.ctx)
 	n.seedPeerCancel = cancel
 	n.seedPeerActive = true
+	var workerID [8]byte
+	if _, err := rand.Read(workerID[:]); err != nil {
+		n.logger.Error("failed to generate worker ID", zap.Error(err))
+		n.seedPeerActive = false
+		n.seedPeerCancel = nil
+		cancel()
+		return
+	}
+	n.seedPeerWorkerID = workerID
 
-	go n.seedPeerWorker(ctx)
+	n.seedPeerWg.Add(1)
+	go n.seedPeerWorker(ctx, n.seedPeerWorkerID)
 }
 
 func (n *Node) DisconnectSeedPeer() {
@@ -325,6 +343,7 @@ func (n *Node) DisconnectSeedPeer() {
 	if cancel != nil {
 		cancel()
 	}
+	n.seedPeerWg.Wait()
 }
 
 func (n *Node) Close() error {
