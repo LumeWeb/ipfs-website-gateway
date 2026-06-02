@@ -3,7 +3,7 @@ package server
 import (
 	"net/http"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.uber.org/zap"
 )
 
@@ -15,7 +15,7 @@ const (
 // authMiddleware creates middleware that validates the secret query parameter.
 // This is used to protect the /allowed endpoint from unauthorized access.
 func (s *Server) authMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
+	return func(c *echo.Context) error {
 		// Skip authentication if no secret is configured (for development/testing)
 		if s.config.Server.AllowedSecret == "" {
 			s.logger.Warn("AllowedSecret not configured, skipping authentication for /allowed endpoint")

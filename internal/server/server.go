@@ -7,12 +7,12 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/alexliesenfeld/health"
-	"github.com/labstack/echo-contrib/echoprometheus"
-	"github.com/labstack/echo/v4"
-	echoMiddleware "github.com/labstack/echo/v4/middleware"
-	"golang.org/x/time/rate"
+	"github.com/labstack/echo-contrib/v5/echoprometheus"
+	"github.com/labstack/echo/v5"
+	echoMiddleware "github.com/labstack/echo/v5/middleware"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 	gw "go.lumeweb.com/ipfs-website-gateway/internal/gateway"
@@ -48,9 +48,6 @@ type Server struct {
 func NewServer(cfg *config.Config, logger *zap.Logger) *Server {
 	e := echo.New()
 
-	e.HideBanner = true
-	e.HidePort = true
-
 	// Configure IP extractor - using X-Real-IP first (for Caddy), then X-Forwarded-For
 	e.IPExtractor = func(r *http.Request) string {
 		// Try X-Real-IP header first (Caddy sets this)
@@ -84,7 +81,7 @@ func (s *Server) setupMiddleware(e *echo.Echo) {
 		LogURI:       true,
 		LogStatus:    true,
 		LogRemoteIP:  true,
-		LogValuesFunc: func(c echo.Context, v echoMiddleware.RequestLoggerValues) error {
+		LogValuesFunc: func(c *echo.Context, v echoMiddleware.RequestLoggerValues) error {
 			s.logger.Info("request",
 				zap.String("method", v.Method),
 				zap.String("uri", v.URI),
@@ -117,7 +114,7 @@ func (s *Server) setupRoutes(e *echo.Echo) {
 		})
 
 		if s.config.Observability.Metrics.IsBasicAuthEnabled() {
-			e.GET(metricsPath, handler, echoMiddleware.BasicAuth(func(username, password string, c echo.Context) (bool, error) {
+			e.GET(metricsPath, handler, echoMiddleware.BasicAuth(func(c *echo.Context, username, password string) (bool, error) {
 				return subtle.ConstantTimeCompare([]byte(password), []byte(s.config.Observability.Metrics.BasicAuthPassword)) == 1, nil
 			}))
 		} else {
@@ -130,13 +127,13 @@ func (s *Server) setupRoutes(e *echo.Echo) {
 	if s.config.RateLimit.Enabled {
 		store := echoMiddleware.NewRateLimiterMemoryStoreWithConfig(
 			echoMiddleware.RateLimiterMemoryStoreConfig{
-				Rate:      rate.Limit(s.config.RateLimit.Rate),
+				Rate:      s.config.RateLimit.Rate,
 				Burst:     s.config.RateLimit.Burst,
 				ExpiresIn: s.config.RateLimit.ExpiresIn,
 			},
 		)
 
-		denyHandler := func(c echo.Context, identifier string, err error) error {
+		denyHandler := func(c *echo.Context, identifier string, err error) error {
 			c.Response().Header().Set("X-RateLimit-Limit", fmt.Sprintf("%.2f", s.config.RateLimit.Rate))
 			c.Response().Header().Set("X-RateLimit-Burst", fmt.Sprintf("%d", s.config.RateLimit.Burst))
 
@@ -180,7 +177,7 @@ func (s *Server) setupRoutes(e *echo.Echo) {
 //   - 400 Bad Request: for all failures (auth, domain validation, DNSLink, API)
 //
 // SECURITY: Always returns 400 on failure to prevent information leakage.
-func (s *Server) allowedHandler(c echo.Context) (err error) {
+func (s *Server) allowedHandler(c *echo.Context) (err error) {
 	ctx := c.Request().Context()
 	ctx, span := otel.TraceMethod(ctx, "Server.allowedHandler",
 		otel.WithAttributes(
@@ -328,7 +325,7 @@ func isValidDomain(domain string) bool {
 
 // healthCheckHandler handles health check requests.
 // Only accessible from loopback addresses (127.0.0.0/8, ::1).
-func (s *Server) healthCheckHandler(c echo.Context) (err error) {
+func (s *Server) healthCheckHandler(c *echo.Context) (err error) {
 	ctx, span := otel.TraceMethod(c.Request().Context(), "Server.healthCheckHandler")
 	defer func() { otel.EndSpanWithErr(span, err) }()
 
@@ -350,15 +347,15 @@ func (s *Server) healthCheckHandler(c echo.Context) (err error) {
 }
 
 
-// Start begins serving HTTP requests on the specified address.
-func (s *Server) Start(addr string) error {
-	return s.echo.Start(addr)
-}
-
-// Shutdown gracefully stops the server, allowing in-flight requests to complete.
-func (s *Server) Shutdown(ctx context.Context) error {
-	s.logger.Info("server shutting down")
-	return s.echo.Shutdown(ctx)
+// Start begins serving HTTP requests. Blocks until ctx is cancelled, then gracefully shuts down.
+func (s *Server) Start(ctx context.Context, addr string) error {
+	sc := echo.StartConfig{
+		Address:         addr,
+		HideBanner:      true,
+		HidePort:        true,
+		GracefulTimeout: 30 * time.Second,
+	}
+	return sc.Start(ctx, s.echo)
 }
 
 // DNSValidator defines the interface for DNSLink validation.

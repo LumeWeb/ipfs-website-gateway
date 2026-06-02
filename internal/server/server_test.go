@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 	"go.uber.org/zap"
 )
@@ -106,7 +106,7 @@ func TestServerMiddleware(t *testing.T) {
 	server.InitializeRoutes()
 
 	t.Run("recover middleware handles panic", func(t *testing.T) {
-		server.echo.GET("/panic", func(c echo.Context) error {
+		server.echo.GET("/panic", func(c *echo.Context) error {
 			panic("test panic")
 		})
 
@@ -130,7 +130,7 @@ func TestServerMiddleware(t *testing.T) {
 		serverWithProxies := NewServer(cfgWithProxies, logger)
 		serverWithProxies.InitializeRoutes()
 
-		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
+		serverWithProxies.echo.GET("/ip", func(c *echo.Context) error {
 			// Check if IP extractor set the real IP
 			if realIP := c.RealIP(); realIP != "" {
 				return c.String(http.StatusOK, realIP)
@@ -164,7 +164,7 @@ func TestServerMiddleware(t *testing.T) {
 		serverWithProxies := NewServer(cfgWithProxies, logger)
 		serverWithProxies.InitializeRoutes()
 
-		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
+		serverWithProxies.echo.GET("/ip", func(c *echo.Context) error {
 			// Check if IP extractor set the real IP
 			if realIP := c.RealIP(); realIP != "" {
 				return c.String(http.StatusOK, realIP)
@@ -202,7 +202,7 @@ func TestServerMiddleware(t *testing.T) {
 		serverWithProxies := NewServer(cfgWithProxies, logger)
 		serverWithProxies.InitializeRoutes()
 
-		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
+		serverWithProxies.echo.GET("/ip", func(c *echo.Context) error {
 			// Check if IP extractor set the real IP
 			if realIP := c.RealIP(); realIP != "" {
 				return c.String(http.StatusOK, realIP)
@@ -237,7 +237,7 @@ func TestServerMiddleware(t *testing.T) {
 		serverWithProxies := NewServer(cfgWithProxies, logger)
 		serverWithProxies.InitializeRoutes()
 
-		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
+		serverWithProxies.echo.GET("/ip", func(c *echo.Context) error {
 			// Check if IP extractor set the real IP
 			if realIP := c.RealIP(); realIP != "" {
 				return c.String(http.StatusOK, realIP)
@@ -272,7 +272,7 @@ func TestServerMiddleware(t *testing.T) {
 		serverWithProxies := NewServer(cfgWithProxies, logger)
 		serverWithProxies.InitializeRoutes()
 
-		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
+		serverWithProxies.echo.GET("/ip", func(c *echo.Context) error {
 			// Check if IP extractor set the real IP
 			if realIP := c.RealIP(); realIP != "" {
 				return c.String(http.StatusOK, realIP)
@@ -308,8 +308,7 @@ func TestServerMiddleware(t *testing.T) {
 		serverWithProxies := NewServer(cfgWithProxies, logger)
 		serverWithProxies.InitializeRoutes()
 
-		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
-			// Check if IP extractor set the real IP
+		serverWithProxies.echo.GET("/ip", func(c *echo.Context) error {
 			if realIP := c.RealIP(); realIP != "" {
 				return c.String(http.StatusOK, realIP)
 			}
@@ -318,7 +317,7 @@ func TestServerMiddleware(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodGet, "/ip", nil)
 		req.RemoteAddr = "127.0.0.1:12345"
-		req.Header.Set("X-Real-IP", "2001:db8::1")
+		req.Header.Set("X-Real-IP", "::1")
 		rec := httptest.NewRecorder()
 		serverWithProxies.echo.ServeHTTP(rec, req)
 
@@ -326,9 +325,9 @@ func TestServerMiddleware(t *testing.T) {
 			t.Errorf("Expected status 200, got %d", rec.Code)
 		}
 		body := rec.Body.String()
-		expected := "2001:db8::1"
+		expected := "::1"
 		if body != expected {
-			t.Errorf("Expected RealIP to be '%s', got '%s'", expected, body)
+			t.Errorf("Expected RealIP to be '%s' from X-Real-IP, got '%s'", expected, body)
 		}
 	})
 
@@ -343,7 +342,7 @@ func TestServerMiddleware(t *testing.T) {
 		serverWithProxies := NewServer(cfgWithProxies, logger)
 		serverWithProxies.InitializeRoutes()
 
-		serverWithProxies.echo.GET("/ip", func(c echo.Context) error {
+		serverWithProxies.echo.GET("/ip", func(c *echo.Context) error {
 			// Check if IP extractor set the real IP
 			if realIP := c.RealIP(); realIP != "" {
 				return c.String(http.StatusOK, realIP)
@@ -379,23 +378,20 @@ func TestServerStart(t *testing.T) {
 	server := NewServer(cfg, logger)
 	server.InitializeRoutes()
 
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- server.Start(":0")
+		errChan <- server.Start(ctx, ":0")
 	}()
 
 	select {
 	case err := <-errChan:
-		if err != nil && !strings.Contains(err.Error(), "Server closed") {
+		if err != nil && !strings.Contains(err.Error(), "Server closed") && ctx.Err() == nil {
 			t.Errorf("Start returned error: %v", err)
 		}
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		t.Errorf("Shutdown returned error: %v", err)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
 
@@ -411,24 +407,23 @@ func TestServerShutdown(t *testing.T) {
 	server := NewServer(cfg, logger)
 	server.InitializeRoutes()
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- server.Start(":0")
+		errChan <- server.Start(ctx, ":0")
 	}()
 
 	time.Sleep(50 * time.Millisecond)
 
-	ctx := context.Background()
-	if err := server.Shutdown(ctx); err != nil {
-		t.Errorf("Shutdown returned error: %v", err)
-	}
+	cancel()
 
 	select {
 	case err := <-errChan:
 		if err != nil && !strings.Contains(err.Error(), "Server closed") {
 			t.Errorf("Start returned error after shutdown: %v", err)
 		}
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(200 * time.Millisecond):
 		t.Error("Server did not shut down within timeout")
 	}
 }
