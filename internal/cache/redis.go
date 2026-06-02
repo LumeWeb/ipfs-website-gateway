@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"time"
 
@@ -13,7 +14,7 @@ type RedisClient struct {
 	prefix string
 }
 
-func NewRedisClient(url, password string, db int, prefix string) (*RedisClient, error) {
+func NewRedisClient(url, password string, db int, prefix string, insecureTLS bool) (*RedisClient, error) {
 	opts, err := redis.ParseURL(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse redis URL: %w", err)
@@ -23,6 +24,10 @@ func NewRedisClient(url, password string, db int, prefix string) (*RedisClient, 
 		opts.Password = password
 	}
 	opts.DB = db
+
+	if insecureTLS {
+		opts.TLSConfig = &tls.Config{InsecureSkipVerify: true}
+	}
 
 	client := redis.NewClient(opts)
 

@@ -142,7 +142,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	logger.Info("API client initialized", zap.String("url", cfg.API.URL))
 
 	// Initialize Redis client
-	redisClient, err := cache.NewRedisClient(cfg.Cache.RedisURL, cfg.Cache.RedisPassword, cfg.Cache.RedisDB, cfg.Cache.RedisKeyPrefix)
+	redisClient, err := cache.NewRedisClient(cfg.Cache.RedisURL, cfg.Cache.RedisPassword, cfg.Cache.RedisDB, cfg.Cache.RedisKeyPrefix, cfg.Cache.RedisInsecureTLS)
 	if err != nil {
 		logger.Error("failed to initialize Redis client", zap.Error(err))
 		return fmt.Errorf("failed to initialize Redis client: %w", err)
