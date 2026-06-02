@@ -87,7 +87,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	cfg = cfgMgr.Config()
 
 	// Must inject before any Boxo components are created (global singleton)
-	if err := metrics.InjectPrometheusAdapter(metrics.Registry()); err != nil {
+	if err := metrics.InjectPrometheusAdapter(metrics.Registerer()); err != nil {
 		logger.Warn("failed to inject metrics adapter, boxo metrics will be noop", zap.Error(err))
 	}
 
