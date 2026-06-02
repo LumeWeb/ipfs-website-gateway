@@ -13,6 +13,7 @@ A stateless edge IPFS gateway that serves DNSLink websites with strict access co
 - **Boxo IPFS integration** - Lightweight Bitswap client-only node for content fetching from P2P network
 - **Caddy On-Demand TLS** - `/allowed` endpoint for certificate issuance validation with optional rate limiting and auth
 - **Health monitoring** - `/healthz` endpoint checking internal API and IPFS peer connectivity
+- **Cache pre-warming** - Automatically populates content cache when IPNS pubsub detects a changed content hash
 - **Graceful shutdown** - Proper cleanup on SIGINT/SIGTERM
 
 ## Architecture
@@ -140,6 +141,12 @@ cache:
   content_cache_max_bytes: 10737418240  # 10GB
   content_cache_lru_size: 100000
 
+prewarm:
+  enabled: true
+  max_concurrency: 2
+  retry_attempts: 2
+  retry_delay: 1s
+
 logging:
   level: info
 
@@ -179,6 +186,10 @@ All configuration can be set via environment variables using the format `GATEWAY
 | `GATEWAY__RATE_LIMIT__RATE` | Rate limit (requests/second) | `0.167` |
 | `GATEWAY__RATE_LIMIT__BURST` | Rate limit burst | `10` |
 | `GATEWAY__RATE_LIMIT__EXPIRES_IN` | Rate limiter cleanup interval | `5m` |
+| `GATEWAY__PREWARM__ENABLED` | Enable cache pre-warming on IPNS updates | `true` |
+| `GATEWAY__PREWARM__MAX_CONCURRENCY` | Max concurrent DAG walks | `2` |
+| `GATEWAY__PREWARM__RETRY_ATTEMPTS` | Block fetch retry attempts | `2` |
+| `GATEWAY__PREWARM__RETRY_DELAY` | Retry delay between attempts | `1s` |
 
 ## API Reference
 
@@ -257,6 +268,7 @@ Validates whether a domain is allowed for TLS certificate issuance. Used by Cadd
 │   ├── gateway/         # Boxo gateway handler + access control
 │   ├── health/          # Health checks
 │   ├── ipfs/            # IPFS node and fetcher
+│   ├── prewarm/         # Cache pre-warming on IPNS updates
 │   └── server/          # Echo server setup
 ├── pkg/types/           # Common types
 ├── vendor/              # Vendored dependencies

@@ -17,6 +17,7 @@ type Config struct {
 	API       APIConfig       `config:"api"`
 	IPFS      IPFSConfig      `config:"ipfs"`
 	Cache     CacheConfig     `config:"cache"`
+	Prewarm   PrewarmConfig   `config:"prewarm"`
 	Logging   LoggingConfig   `config:"logging"`
 	RateLimit RateLimitConfig `config:"rate_limit"`
 }
@@ -82,6 +83,13 @@ type CacheConfig struct {
 	IPNSCacheLRUSize     int           `config:"ipns_cache_lru_size"`
 	IPNSCacheFreshTTL    time.Duration `config:"ipns_cache_fresh_ttl"`
 	IPNSCachePath        string        `config:"ipns_cache_path"`
+}
+
+type PrewarmConfig struct {
+	Enabled       bool          `config:"enabled"`
+	MaxConc       int           `config:"max_concurrency"`
+	RetryAttempts uint          `config:"retry_attempts"`
+	RetryDelay    time.Duration `config:"retry_delay"`
 }
 
 // LoggingConfig holds logging configuration settings.
@@ -165,6 +173,16 @@ func (c CacheConfig) Defaults() map[string]any {
 	}
 }
 
+// Defaults implements the Defaults interface for providing default configuration values.
+func (c PrewarmConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Enabled":       true,
+		"MaxConc":       2,
+		"RetryAttempts": uint(2),
+		"RetryDelay":    1 * time.Second,
+	}
+}
+
 // Schema implements the ConfigSchemaProvider interface for Zog validation.
 func (c CacheConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
@@ -177,6 +195,16 @@ func (c CacheConfig) Schema() zog.ZogSchema {
 		"IPNSCacheLRUSize":     zog.Int().GT(0).Optional(),
 		"IPNSCacheFreshTTL":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 		"IPNSCachePath":        zog.String().Optional(),
+	})
+}
+
+// Schema implements the ConfigSchemaProvider interface for Zog validation.
+func (c PrewarmConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Enabled":       zog.Bool().Optional(),
+		"MaxConc":       zog.Int().GT(0).Optional(),
+		"RetryAttempts": zog.Uint().GT(0).Optional(),
+		"RetryDelay":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 	})
 }
 

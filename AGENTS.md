@@ -112,6 +112,21 @@ This is a stateless edge IPFS gateway that serves DNSLink websites with strict a
 - `NewClientFromWebsitesService(websites)` for test injection
 - Error handling delegates to SDK; callers check error strings for status
 
+#### Pre-warming Layer (`internal/prewarm/`)
+- **Prewarmer**: Walks UnixFS DAGs via `blockservice.BlockService` to populate ContentBlockstore before visitors arrive
+  - `NewPrewarmer(bs, logger, timeout, maxConcurrency, retryAttempts, retryDelay)` — returns error if `bs` is nil
+  - `Submit(rootCID)` — fire-and-forget DAG walk, deduped by active map, drops if pool stopped
+  - `Stop()` — blocks until all in-flight walks complete
+  - Uses `workerpool.WorkerPool` for bounded concurrency, `retry-go/v5` for block-level retries
+  - `merkledag.OnError` returns nil to skip unreachable blocks and continue walking (partial cache > no cache)
+- **PrewarmCallback**: `func(key string, resolvedPath path.Path)` type in `internal/namesys/stale.go`
+  - Set via `StaleWhileRevalidateNameSystem.SetPrewarmCallback()`
+  - Fired by `watchLoop()` and `revalidate()` only when the resolved IPNS path changes
+  - Does NOT fire for identical paths (deduped by namesys)
+- **Wiring in main.go**: Extracts root CID from resolved `/ipfs/{CID}` path, calls `prewarmer.Submit(rootCID)`
+- Only IPNS-triggered paths are pre-warmed; IPFS paths are immutable by definition
+- Config: `PrewarmConfig` struct at `Config.Prewarm` (env vars: `GATEWAY__PREWARM__*`)
+
 #### Caching Layer (`internal/cache/`)
 - **Status Cache**: In-memory LRU cache with TTL for website status queries
   - `Get(domain) *CacheResult` returns Hit/Expired/Entry fields
@@ -176,6 +191,7 @@ This is a stateless edge IPFS gateway that serves DNSLink websites with strict a
 - `internal/dns/` - DNSLink validation (bare function)
 - `internal/api/` - Internal API client using ipfs-sdk
 - `internal/cache/` - Status cache (in-memory), content cache (disk-based), ContentBlockstore adapter
+- `internal/prewarm/` - Cache pre-warming on IPNS pubsub updates
 - `internal/ipfs/` - IPFS node setup with dependency-injected blockstore
 - `internal/gateway/` - Boxo-based gateway handler with access control middleware
 - `internal/health/` - Health check setup
@@ -191,6 +207,13 @@ Components use setter methods for dependency injection rather than constructor i
 - `SetStatusCache(cache StatusCache)`
 - `SetHealthChecker(checker health.Checker)`
 - `SetGateway(g *gw.Gateway)`
+
+The Prewarmer uses constructor injection:
+- `NewPrewarmer(bs, logger, timeout, maxConcurrency, retryAttempts, retryDelay)` — returns `(*Prewarmer, error)`
+
+The Gateway and StaleWhileRevalidateNameSystem use setter injection for the callback:
+- `Gateway.SetPrewarmCallback(fn)`
+- `StaleWhileRevalidateNameSystem.SetPrewarmCallback(fn)`
 
 The IPFS Node uses constructor injection:
 - `NewNode(ctx, seedPeer, blockstore.Blockstore, logger)`
@@ -258,3 +281,7 @@ Interfaces defined by consumers (Go convention):
 - `GATEWAY__RATE_LIMIT__RATE`: 0.167 (requests per second)
 - `GATEWAY__RATE_LIMIT__BURST`: 10
 - `GATEWAY__RATE_LIMIT__EXPIRES_IN`: 5m
+- `GATEWAY__PREWARM__ENABLED`: true
+- `GATEWAY__PREWARM__MAX_CONCURRENCY`: 2
+- `GATEWAY__PREWARM__RETRY_ATTEMPTS`: 2
+- `GATEWAY__PREWARM__RETRY_DELAY`: 1s

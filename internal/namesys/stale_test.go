@@ -1079,3 +1079,158 @@ func TestWatchLoop_StripsSubPathBeforeStoringAndDeduplicating(t *testing.T) {
 		t.Errorf("expected stripped path %s in store, got %s — sub-path was not stripped before PutStale", strippedB.String(), entry.result.Path.String())
 	}
 }
+
+func TestPrewarmCallback_WatchLoop_FiresOnChangedPath(t *testing.T) {
+	t.Parallel()
+
+	key := "/ipns/12D3KooWabc"
+	pathA := newPath(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu")
+	pathB := newPath(t, "/ipfs/bafybeiaq5sxjbozawwiqcji7m6srdtt75wnnh7mfpj7iwm75unvndi6kca")
+
+	store := newTestStore(t)
+	store.PutStale(key, staleEntry{
+		result:   namesys.Result{Path: pathA, TTL: time.Minute},
+		cachedAt: time.Now(),
+	})
+
+	var callbackKey string
+	var callbackPath path.Path
+	callbackFired := make(chan struct{}, 1)
+
+	var callCount atomic.Int32
+	mock := &mockAsyncNameSystem{
+		resolveAsyncFn: func(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) <-chan namesys.AsyncResult {
+			n := callCount.Add(1)
+			ch := make(chan namesys.AsyncResult, 1)
+			if n == 1 {
+				ch <- namesys.AsyncResult{Path: pathB, TTL: time.Minute}
+			} else {
+				ch <- namesys.AsyncResult{Path: pathB, TTL: time.Minute}
+			}
+			close(ch)
+			if n >= 2 {
+				<-ctx.Done()
+			}
+			return ch
+		},
+	}
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+	sut.EnableWatch()
+	sut.SetPrewarmCallback(func(k string, p path.Path) {
+		callbackKey = k
+		callbackPath = p
+		select {
+		case callbackFired <- struct{}{}:
+		default:
+		}
+	})
+
+	sut.startWatcher(key)
+
+	select {
+	case <-callbackFired:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for prewarm callback to fire")
+	}
+	sut.Stop()
+
+	if callbackKey != key {
+		t.Errorf("expected callback key %q, got %q", key, callbackKey)
+	}
+	if callbackPath.String() != pathB.String() {
+		t.Errorf("expected callback path %s, got %s", pathB.String(), callbackPath.String())
+	}
+}
+
+func TestPrewarmCallback_WatchLoop_DoesNotFireOnIdenticalPath(t *testing.T) {
+	t.Parallel()
+
+	key := "/ipns/12D3KooWabc"
+	initialPath := newPath(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu")
+
+	store := newTestStore(t)
+	store.PutStale(key, staleEntry{
+		result:   namesys.Result{Path: initialPath, TTL: time.Minute},
+		cachedAt: time.Now().Add(-time.Minute),
+	})
+
+	var callbackCount atomic.Int32
+	var callCount atomic.Int32
+	mock := &mockAsyncNameSystem{
+		resolveAsyncFn: func(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) <-chan namesys.AsyncResult {
+			n := callCount.Add(1)
+			ch := make(chan namesys.AsyncResult, 1)
+			ch <- namesys.AsyncResult{Path: initialPath, TTL: time.Minute}
+			close(ch)
+			if n >= 3 {
+				<-ctx.Done()
+			}
+			return ch
+		},
+	}
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+	sut.EnableWatch()
+	sut.SetPrewarmCallback(func(k string, p path.Path) {
+		callbackCount.Add(1)
+	})
+
+	sut.startWatcher(key)
+
+	time.Sleep(200 * time.Millisecond)
+	sut.Stop()
+
+	if callbackCount.Load() != 0 {
+		t.Errorf("expected callback not to fire for identical path, got %d calls", callbackCount.Load())
+	}
+}
+
+func TestPrewarmCallback_Revalidate_FiresOnChangedPath(t *testing.T) {
+	key := "/ipns/12D3KooWabc"
+	oldPath := newPath(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu")
+	newResolvedPath := newPath(t, "/ipfs/bafybeiaq5sxjbozawwiqcji7m6srdtt75wnnh7mfpj7iwm75unvndi6kca")
+
+	store := newTestStore(t)
+	store.PutStale(key, staleEntry{
+		result:   namesys.Result{Path: oldPath, TTL: time.Minute},
+		cachedAt: time.Now().Add(-time.Minute),
+	})
+
+	var callbackKey string
+	var callbackPath path.Path
+	callbackFired := make(chan struct{}, 1)
+
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			return namesys.Result{Path: newResolvedPath, TTL: time.Minute}, nil
+		},
+	}
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+	sut.SetPrewarmCallback(func(k string, p path.Path) {
+		callbackKey = k
+		callbackPath = p
+		select {
+		case callbackFired <- struct{}{}:
+		default:
+		}
+	})
+
+	p := newPath(t, key)
+	sut.revalidate(p, nil)
+
+	select {
+	case <-callbackFired:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for prewarm callback from revalidate")
+	}
+	sut.Stop()
+
+	if callbackKey != key {
+		t.Errorf("expected callback key %q, got %q", key, callbackKey)
+	}
+	if callbackPath.String() != newResolvedPath.String() {
+		t.Errorf("expected callback path %s, got %s", newResolvedPath.String(), callbackPath.String())
+	}
+}
