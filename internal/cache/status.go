@@ -54,9 +54,8 @@ func (sc *StatusCache) Get(domain string) *types.CacheResult {
 
 	now := time.Now()
 	if now.After(entry.ExpiresAt) {
-		sc.cache.Remove(domain)
 		statusCacheExpiredTotal.Inc()
-		return &types.CacheResult{Hit: true, Entry: nil, Expired: true}
+		return &types.CacheResult{Hit: true, Entry: entry, Expired: true}
 	}
 
 	statusCacheHitsTotal.Inc()

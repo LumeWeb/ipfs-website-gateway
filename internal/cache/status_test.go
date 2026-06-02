@@ -16,10 +16,6 @@ func TestNewStatusCache(t *testing.T) {
 		t.Fatalf("NewStatusCache returned error: %v", err)
 	}
 
-	if cache == nil {
-		t.Fatal("NewStatusCache returned nil cache")
-	}
-
 	if cache.ttl != ttl {
 		t.Errorf("expected ttl %v, got %v", ttl, cache.ttl)
 	}
@@ -114,13 +110,21 @@ func TestStatusCache_SetAndGet_Expired(t *testing.T) {
 		t.Error("expected entry to be expired")
 	}
 
-	if result.Entry != nil {
-		t.Error("expected nil entry when expired")
+	if result.Entry == nil {
+		t.Error("expected stale entry when expired (stale-while-revalidate)")
+	}
+
+	if result.Entry.Response == nil || result.Entry.Response.Domain != "example.com" {
+		t.Error("expected stale entry to contain original response data")
 	}
 
 	result2 := cache.Get("example.com")
-	if result2.Hit {
-		t.Error("expected cache miss after expired entry eviction")
+	if !result2.Hit {
+		t.Error("expected cache hit for stale entry")
+	}
+
+	if !result2.Expired {
+		t.Error("expected stale entry to still be expired")
 	}
 }
 

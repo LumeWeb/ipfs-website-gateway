@@ -157,6 +157,7 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 	defer func() { otel.EndSpanWithErr(span, err) }()
 
 	start := time.Now()
+	var staleEntry *types.CacheEntry
 
 	if g.statusCache != nil {
 		cacheResult := g.statusCache.Get(domain)
@@ -172,11 +173,18 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 			return cacheResult.Entry.Response, nil
 		}
 		if cacheResult.Hit && cacheResult.Expired {
+			staleEntry = cacheResult.Entry
 			accessCheckDuration.WithLabelValues(LabelResultCacheExpired).Observe(time.Since(start).Seconds())
 			accessCheckTotal.WithLabelValues(LabelResultCacheExpired).Inc()
-			g.logger.Debug("status cache expired, revalidating",
-				zap.String("domain", domain),
-			)
+			if staleEntry != nil && staleEntry.Err == nil && staleEntry.Response != nil {
+				g.logger.Debug("status cache expired, serving stale while revalidating",
+					zap.String("domain", domain),
+				)
+			} else {
+				g.logger.Debug("status cache expired, revalidating",
+					zap.String("domain", domain),
+				)
+			}
 		}
 		if !cacheResult.Hit {
 			accessCheckDuration.WithLabelValues(LabelResultCacheMiss).Observe(time.Since(start).Seconds())
@@ -198,12 +206,33 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 			zap.String("domain", domain),
 			zap.Error(err),
 		)
-		if g.statusCache != nil {
-			if errors.Is(err, ipfs.ErrNotFound) {
+		if errors.Is(err, ipfs.ErrNotFound) {
+			if g.statusCache != nil {
 				g.statusCache.SetError(domain, err)
-			} else {
+			}
+			return nil, err
+		}
+		if errors.Is(err, ipfs.ErrGone) {
+			if g.statusCache != nil {
 				g.statusCache.SetErrorShortTTL(domain, err)
 			}
+			return nil, err
+		}
+		if errors.Is(err, ipfs.ErrUnauthorized) {
+			if g.statusCache != nil {
+				g.statusCache.SetErrorShortTTL(domain, err)
+			}
+			return nil, err
+		}
+		if staleEntry != nil && staleEntry.Err == nil && staleEntry.Response != nil && staleEntry.Response.Status == types.StatusActive {
+			g.logger.Info("revalidation failed but serving stale active data",
+				zap.String("domain", domain),
+				zap.Error(err),
+			)
+			return staleEntry.Response, nil
+		}
+		if g.statusCache != nil {
+			g.statusCache.SetErrorShortTTL(domain, err)
 		}
 		return nil, err
 	}
@@ -462,10 +491,9 @@ func (m *AccessControlMiddleware) renderInvalidPage(w http.ResponseWriter, statu
 // only the status code so the browser shows a clean network error instead.
 type subResourceErrorHandler struct {
 	http.ResponseWriter
-	request    *http.Request
-	statusCode int
+	request     *http.Request
+	statusCode  int
 	wroteHeader bool
-	bodyBuf    bytes.Buffer
 }
 
 func newSubResourceErrorHandler(w http.ResponseWriter, r *http.Request) *subResourceErrorHandler {
