@@ -201,7 +201,7 @@ func (s *Server) allowedHandler(c echo.Context) (err error) {
 		return c.NoContent(http.StatusBadRequest)
 	}
 
-	if s.config.Server.GatewayDomain != "" && domain == s.config.Server.GatewayDomain {
+	if s.config.Server.GatewayDomain != "" && strings.EqualFold(domain, s.config.Server.GatewayDomain) {
 		s.logger.Debug("gateway domain auto-allowed for TLS",
 			zap.String("domain", domain),
 		)

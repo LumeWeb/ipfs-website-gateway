@@ -333,7 +333,7 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 			return
 		}
 
-		if gwDomain := m.gateway.GatewayDomain(); gwDomain != "" && domain == gwDomain {
+		if gwDomain := m.gateway.GatewayDomain(); gwDomain != "" && strings.EqualFold(domain, gwDomain) {
 			m.logger.Debug("serving gateway hello page", zap.String("domain", domain))
 			m.renderHelloPage(w, domain)
 			return
