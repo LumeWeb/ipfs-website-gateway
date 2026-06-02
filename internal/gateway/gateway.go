@@ -61,7 +61,7 @@ type Gateway struct {
 	gatewayDomain string
 }
 
-func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsFreshTTL time.Duration, ipnsCachePath string, pubsubEnabled bool, gatewayDomain string) (*Gateway, error) {
+func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsFreshTTL time.Duration, redisClient *cache.RedisClient, pubsubEnabled bool, gatewayDomain string) (*Gateway, error) {
 	ns, err := gateway.NewDNSResolver(nil, nil)
 	if err != nil {
 		return nil, err
@@ -76,7 +76,7 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 		zap.String("type", fmt.Sprintf("%T", valueStore)),
 	)
 
-	ipnsStore, err := stalenamesys.NewIPNSStore(ipnsCachePath, ipnsFreshTTL, retrievalTimeout, ipnsCacheSize, nsLogger)
+	ipnsStore, err := stalenamesys.NewIPNSStore(redisClient, ipnsFreshTTL, retrievalTimeout, ipnsCacheSize, nsLogger)
 	if err != nil {
 		return nil, err
 	}
@@ -166,42 +166,35 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 	defer func() { otel.EndSpanWithErr(span, err) }()
 
 	start := time.Now()
-	var staleEntry *types.CacheEntry
 
+	// Cache.Get() triggers background revalidation for expired entries within staleTTL
 	if g.statusCache != nil {
 		cacheResult := g.statusCache.Get(domain)
-		if cacheResult.Hit && !cacheResult.Expired && cacheResult.Entry != nil {
-			accessCheckDuration.WithLabelValues(LabelResultCacheHit).Observe(time.Since(start).Seconds())
-			accessCheckTotal.WithLabelValues(LabelResultCacheHit).Inc()
-			g.logger.Debug("status cache hit",
-				zap.String("domain", domain),
-			)
+		if cacheResult.Hit && cacheResult.Entry != nil {
+			if !cacheResult.Expired {
+				accessCheckDuration.WithLabelValues(LabelResultCacheHit).Observe(time.Since(start).Seconds())
+				accessCheckTotal.WithLabelValues(LabelResultCacheHit).Inc()
+				g.logger.Debug("status cache hit",
+					zap.String("domain", domain),
+				)
+			} else {
+				accessCheckDuration.WithLabelValues(LabelResultCacheExpired).Observe(time.Since(start).Seconds())
+				accessCheckTotal.WithLabelValues(LabelResultCacheExpired).Inc()
+				g.logger.Debug("status cache expired, serving stale, background revalidation triggered",
+					zap.String("domain", domain),
+				)
+			}
 			if cacheResult.Entry.Err != nil {
 				return nil, cacheResult.Entry.Err
 			}
 			return cacheResult.Entry.Response, nil
 		}
-		if cacheResult.Hit && cacheResult.Expired {
-			staleEntry = cacheResult.Entry
-			accessCheckDuration.WithLabelValues(LabelResultCacheExpired).Observe(time.Since(start).Seconds())
-			accessCheckTotal.WithLabelValues(LabelResultCacheExpired).Inc()
-			if staleEntry != nil && staleEntry.Err == nil && staleEntry.Response != nil {
-				g.logger.Debug("status cache expired, serving stale while revalidating",
-					zap.String("domain", domain),
-				)
-			} else {
-				g.logger.Debug("status cache expired, revalidating",
-					zap.String("domain", domain),
-				)
-			}
-		}
-		if !cacheResult.Hit {
-			accessCheckDuration.WithLabelValues(LabelResultCacheMiss).Observe(time.Since(start).Seconds())
-			accessCheckTotal.WithLabelValues(LabelResultCacheMiss).Inc()
-			g.logger.Debug("status cache miss",
-				zap.String("domain", domain),
-			)
-		}
+
+		accessCheckDuration.WithLabelValues(LabelResultCacheMiss).Observe(time.Since(start).Seconds())
+		accessCheckTotal.WithLabelValues(LabelResultCacheMiss).Inc()
+		g.logger.Debug("status cache miss",
+			zap.String("domain", domain),
+		)
 	}
 
 	if g.api == nil {
@@ -232,13 +225,6 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 				g.statusCache.SetErrorShortTTL(domain, err)
 			}
 			return nil, err
-		}
-		if staleEntry != nil && staleEntry.Err == nil && staleEntry.Response != nil && staleEntry.Response.Status == types.StatusActive {
-			g.logger.Info("revalidation failed but serving stale active data",
-				zap.String("domain", domain),
-				zap.Error(err),
-			)
-			return staleEntry.Response, nil
 		}
 		if g.statusCache != nil {
 			g.statusCache.SetErrorShortTTL(domain, err)

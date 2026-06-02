@@ -60,7 +60,7 @@ func newPath(t *testing.T, s string) path.Path {
 
 func newTestStore(t *testing.T) *IPNSStore {
 	t.Helper()
-	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	store, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestResolve_Subpaths_StaleCacheReconstructsCorrectly(t *testing.T) {
 	var resolveCall atomic.Int32
 	mock := makeBoxoMockResolver(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu", &resolveCall)
 
-	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	store, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -345,7 +345,7 @@ func TestResolve_StaleWindow_TriggersRevalidation(t *testing.T) {
 		},
 	}
 
-	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	store, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -509,11 +509,9 @@ func TestIPNSStore_Delete(t *testing.T) {
 }
 
 func TestIPNSStore_PersistsAcrossRestart(t *testing.T) {
-	dir := t.TempDir()
-
 	p := newPath(t, "/ipns/example.com")
 
-	store1, err := NewIPNSStore(dir, 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	store1, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -523,27 +521,22 @@ func TestIPNSStore_PersistsAcrossRestart(t *testing.T) {
 	})
 	_ = store1.Close()
 
-	store2, err := NewIPNSStore(dir, 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	store2, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = store2.Close() }()
 
-	got, ok := store2.GetStale("/ipns/example.com")
-	if !ok {
-		t.Fatal("expected stale entry to survive restart")
-	}
-	if got.result.Path.String() != p.String() {
-		t.Errorf("expected path %s, got %s", p.String(), got.result.Path.String())
+	_, ok := store2.GetStale("/ipns/example.com")
+	if ok {
+		t.Error("expected stale entry to NOT survive restart without Redis persistence")
 	}
 }
 
 func TestIPNSStore_OldEntriesSurviveRestart(t *testing.T) {
-	dir := t.TempDir()
-
 	p := newPath(t, "/ipns/example.com")
 
-	store1, err := NewIPNSStore(dir, 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	store1, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -553,23 +546,20 @@ func TestIPNSStore_OldEntriesSurviveRestart(t *testing.T) {
 	})
 	_ = store1.Close()
 
-	store2, err := NewIPNSStore(dir, 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	store2, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = store2.Close() }()
 
-	got, ok := store2.GetStale("/ipns/example.com")
-	if !ok {
-		t.Fatal("expected old stale entry to survive restart (no age-based eviction)")
-	}
-	if got.result.Path.String() != p.String() {
-		t.Errorf("expected path %s, got %s", p.String(), got.result.Path.String())
+	_, ok := store2.GetStale("/ipns/example.com")
+	if ok {
+		t.Error("expected old stale entry to NOT survive restart without Redis persistence")
 	}
 }
 
 func TestIPNSStore_LRUEviction(t *testing.T) {
-	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 3, zap.NewNop())
+	store, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 3, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,7 +650,7 @@ func TestResolve_FastPath_ReturnsImmediatelyWithStaleCache(t *testing.T) {
 		},
 	}
 
-	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	store, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +692,7 @@ func TestResolveAsync_FastPath_ReturnsImmediatelyWithStaleCache(t *testing.T) {
 		},
 	}
 
-	store, err := NewIPNSStore(t.TempDir(), 30*time.Second, 30*time.Second, 128, zap.NewNop())
+	store, err := NewIPNSStore(nil, 30*time.Second, 30*time.Second, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,7 +734,7 @@ func TestResolve_TimesOut_NoStale_ReturnsError(t *testing.T) {
 		},
 	}
 
-	store, err := NewIPNSStore(t.TempDir(), 5*time.Minute, 100*time.Millisecond, 128, zap.NewNop())
+	store, err := NewIPNSStore(nil, 5*time.Minute, 100*time.Millisecond, 128, zap.NewNop())
 	if err != nil {
 		t.Fatal(err)
 	}

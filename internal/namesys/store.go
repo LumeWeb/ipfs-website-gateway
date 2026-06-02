@@ -2,66 +2,35 @@ package namesys
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"os"
-	"path/filepath"
 	"time"
 
-	leveldb "github.com/ipfs/go-ds-leveldb"
 	ds "github.com/ipfs/go-datastore"
-	dsq "github.com/ipfs/go-datastore/query"
-	dsns "github.com/ipfs/go-datastore/namespace"
 	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/ipfs/boxo/namesys"
 	"github.com/ipfs/boxo/path"
+	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	"go.uber.org/zap"
 )
-
-const (
-	stalePrefix    = "/ipns-stale/"
-	ipnsDataPrefix = "/ipns-data/"
-)
-
-type persistentStaleEntry struct {
-	Path     string `json:"p"`
-	TTL      int64  `json:"t"`
-	LastMod  int64  `json:"m"`
-	CachedAt int64  `json:"c"`
-}
 
 type EvictFunc func(key string)
 
 type IPNSStore struct {
-	ldb      ds.Datastore
-	ds       ds.Datastore
-	staleDS  ds.Datastore
-	stale    *lru.Cache[string, staleEntry]
-	freshTTL time.Duration
-	timeout  time.Duration
-	logger   *zap.Logger
-	onEvict  EvictFunc
+	stale       *lru.Cache[string, staleEntry]
+	freshTTL    time.Duration
+	timeout     time.Duration
+	logger      *zap.Logger
+	onEvict     EvictFunc
+	redisStale  *cache.IPNSStaleStore
+	ds          ds.Datastore
 }
 
-func NewIPNSStore(cachePath string, freshTTL time.Duration, timeout time.Duration, maxSize int, logger *zap.Logger) (*IPNSStore, error) {
+func NewIPNSStore(redisClient *cache.RedisClient, freshTTL time.Duration, timeout time.Duration, maxSize int, logger *zap.Logger) (*IPNSStore, error) {
 	if maxSize <= 0 {
 		maxSize = 128
 	}
 
-	dbPath := filepath.Join(cachePath, "ipns-store")
-	if err := os.MkdirAll(dbPath, 0755); err != nil {
-		return nil, err
-	}
-
-	ldb, err := leveldb.NewDatastore(dbPath, nil)
-	if err != nil {
-		return nil, err
-	}
-
 	s := &IPNSStore{
-		ldb:      ldb,
-		ds:       dsns.Wrap(ldb, ds.NewKey(ipnsDataPrefix)),
-		staleDS:  dsns.Wrap(ldb, ds.NewKey(stalePrefix)),
+		ds:       ds.NewMapDatastore(),
 		freshTTL: freshTTL,
 		timeout:  timeout,
 		logger:   logger.Named("ipns-store"),
@@ -73,22 +42,47 @@ func NewIPNSStore(cachePath string, freshTTL time.Duration, timeout time.Duratio
 		}
 	})
 	if err != nil {
-		_ = ldb.Close()
 		return nil, err
 	}
-
 	s.stale = staleCache
 
+	if redisClient != nil {
+		redisStale := cache.NewIPNSStaleStore(redisClient, freshTTL, logger)
+		s.redisStale = redisStale
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		entries, err := redisStale.LoadAllStale(ctx)
+		if err != nil {
+			logger.Warn("failed to load stale entries from Redis, starting fresh", zap.Error(err))
+		} else {
+			loaded := 0
+			for key, se := range entries {
+				p, err := path.NewPath(se.Path)
+				if err != nil {
+					continue
+				}
+				s.stale.Add(key, staleEntry{
+					result: namesys.Result{
+						Path:    p,
+						TTL:     time.Duration(se.TTL),
+						LastMod: time.Unix(0, se.LastMod),
+					},
+					cachedAt: time.Unix(0, se.CachedAt),
+				})
+				loaded++
+			}
+			logger.Info("loaded entries from Redis", zap.Int("count", loaded))
+		}
+	}
+
 	logger.Info("initialized",
-		zap.String("path", dbPath),
 		zap.Int("max_size", maxSize),
 		zap.Duration("fresh_ttl", freshTTL),
 		zap.Duration("timeout", timeout),
+		zap.Bool("redis_enabled", redisClient != nil),
 	)
-
-	if err := s.loadStaleFromDisk(context.Background()); err != nil {
-		logger.Warn("failed to load stale entries from disk, starting fresh", zap.Error(err))
-	}
 
 	return s, nil
 }
@@ -105,50 +99,6 @@ func (s *IPNSStore) Keys() []string {
 	return s.stale.Keys()
 }
 
-func (s *IPNSStore) loadStaleFromDisk(ctx context.Context) error {
-	results, err := s.staleDS.Query(ctx, dsq.Query{Prefix: "/"})
-	if err != nil {
-		return err
-	}
-	defer func() { _ = results.Close() }()
-
-	loaded := 0
-
-	for entry := range results.Next() {
-		if entry.Error != nil {
-			continue
-		}
-
-		var pe persistentStaleEntry
-		if err := json.Unmarshal(entry.Value, &pe); err != nil {
-			continue
-		}
-
-		p, err := path.NewPath(pe.Path)
-		if err != nil {
-			continue
-		}
-
-		cachedAt := time.Unix(0, pe.CachedAt)
-
-		s.stale.Add(pe.Path, staleEntry{
-			result: namesys.Result{
-				Path:    p,
-				TTL:     time.Duration(pe.TTL),
-				LastMod: time.Unix(0, pe.LastMod),
-			},
-			cachedAt: cachedAt,
-		})
-		loaded++
-	}
-
-	s.logger.Info("loaded entries from disk",
-		zap.Int("count", loaded),
-	)
-
-	return nil
-}
-
 func (s *IPNSStore) GetStale(key string) (staleEntry, bool) {
 	entry, ok := s.stale.Get(key)
 	if !ok {
@@ -160,23 +110,19 @@ func (s *IPNSStore) GetStale(key string) (staleEntry, bool) {
 func (s *IPNSStore) PutStale(key string, entry staleEntry) {
 	s.stale.Add(key, entry)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	if s.redisStale != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-	pe := persistentStaleEntry{
-		Path:     entry.result.Path.String(),
-		TTL:      int64(entry.result.TTL),
-		LastMod:  entry.result.LastMod.UnixNano(),
-		CachedAt: entry.cachedAt.UnixNano(),
-	}
-	data, err := json.Marshal(pe)
-	if err != nil {
-		s.logger.Debug("failed to marshal stale entry", zap.Error(err))
-		return
-	}
-
-	if err := s.staleDS.Put(ctx, ds.NewKey(key), data); err != nil {
-		s.logger.Debug("failed to persist stale entry", zap.Error(err))
+		se := cache.StaleEntry{
+			Path:     entry.result.Path.String(),
+			TTL:      int64(entry.result.TTL),
+			LastMod:  entry.result.LastMod.UnixNano(),
+			CachedAt: entry.cachedAt.UnixNano(),
+		}
+		if err := s.redisStale.PutStale(ctx, key, se); err != nil {
+			s.logger.Debug("failed to persist stale entry to Redis", zap.Error(err))
+		}
 	}
 }
 
@@ -186,14 +132,21 @@ func (s *IPNSStore) DeleteStale(key string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	if s.redisStale != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 
-	if err := s.staleDS.Delete(ctx, ds.NewKey(key)); err != nil && !errors.Is(err, ds.ErrNotFound) {
-		s.logger.Debug("failed to delete stale entry from disk", zap.Error(err))
+		if err := s.redisStale.DeleteStale(ctx, key); err != nil {
+			s.logger.Debug("failed to delete stale entry from Redis", zap.Error(err))
+		}
 	}
 }
 
 func (s *IPNSStore) Close() error {
-	return s.ldb.Close()
+	if s.redisStale != nil {
+		if err := s.redisStale.Close(); err != nil {
+			s.logger.Debug("failed to close Redis stale store", zap.Error(err))
+		}
+	}
+	return nil
 }
