@@ -286,6 +286,7 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 		_, span := otel.TraceMethod(ctx, "AccessControlMiddleware.Wrap",
 			otel.WithAttributes(
 				attribute.String("host", r.Host),
+				attribute.String("x-forwarded-host", r.Header.Get("X-Forwarded-Host")),
 				attribute.String("path", r.URL.Path),
 				attribute.String("method", r.Method),
 			),
