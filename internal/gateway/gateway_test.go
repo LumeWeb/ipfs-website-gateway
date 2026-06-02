@@ -136,7 +136,7 @@ func TestCheckAccess_CacheHit(t *testing.T) {
 		},
 	}
 
-	statusCache, err := cache.NewStatusCache(100, 5*time.Minute, 30*time.Second)
+	statusCache, err := cache.NewStatusCacheSimple(100, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestCheckAccess_CacheInvalid(t *testing.T) {
 		},
 	}
 
-	statusCache, err := cache.NewStatusCache(100, 5*time.Minute, 30*time.Second)
+	statusCache, err := cache.NewStatusCacheSimple(100, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache: %v", err)
 	}
@@ -802,7 +802,7 @@ func TestCheckAccess_StaleActiveOnTransientError(t *testing.T) {
 		},
 	}
 
-	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond)
+	statusCache, err := cache.NewStatusCacheSimple(100, 10*time.Millisecond, 10*time.Millisecond)
 	if err != nil {
 		t.Fatalf("NewStatusCache: %v", err)
 	}
@@ -831,7 +831,7 @@ func TestCheckAccess_StaleActiveOnTransientError(t *testing.T) {
 	}
 }
 
-func TestCheckAccess_StaleBlockedByErrNotFound(t *testing.T) {
+func TestCheckAccess_StaleServedWithinStaleWindow(t *testing.T) {
 	callCount := 0
 	apiClient := &mockAPIClient{
 		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
@@ -848,7 +848,8 @@ func TestCheckAccess_StaleBlockedByErrNotFound(t *testing.T) {
 		},
 	}
 
-	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond)
+	staleTTL := 50 * time.Millisecond
+	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond, staleTTL, nil)
 	if err != nil {
 		t.Fatalf("NewStatusCache: %v", err)
 	}
@@ -868,19 +869,28 @@ func TestCheckAccess_StaleBlockedByErrNotFound(t *testing.T) {
 
 	time.Sleep(15 * time.Millisecond)
 
+	// Within staleTTL: stale active data is served immediately (SWR)
 	website, err = gw.CheckAccess(context.Background(), "example.com")
-	if err == nil {
-		t.Fatal("ErrNotFound should NOT be blocked by stale data")
+	if err != nil {
+		t.Fatalf("SWR should serve stale active data, got error: %v", err)
 	}
-	if website != nil {
-		t.Fatal("ErrNotFound should return nil website")
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("SWR should return stale active website")
+	}
+
+	// After staleTTL expires: cache truly expires, API is called
+	time.Sleep(60 * time.Millisecond)
+
+	_, err = gw.CheckAccess(context.Background(), "example.com")
+	if err == nil {
+		t.Fatal("past staleTTL, ErrNotFound should be returned from API")
 	}
 	if !errors.Is(err, ipfs.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 }
 
-func TestCheckAccess_StaleBlockedByErrGone(t *testing.T) {
+func TestCheckAccess_ErrGonePastStaleWindow(t *testing.T) {
 	callCount := 0
 	apiClient := &mockAPIClient{
 		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
@@ -897,7 +907,8 @@ func TestCheckAccess_StaleBlockedByErrGone(t *testing.T) {
 		},
 	}
 
-	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond)
+	staleTTL := 50 * time.Millisecond
+	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond, staleTTL, nil)
 	if err != nil {
 		t.Fatalf("NewStatusCache: %v", err)
 	}
@@ -917,16 +928,28 @@ func TestCheckAccess_StaleBlockedByErrGone(t *testing.T) {
 
 	time.Sleep(15 * time.Millisecond)
 
+	// Within staleTTL: stale active data is served
+	website, err = gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("SWR should serve stale active data, got error: %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("SWR should return stale active website")
+	}
+
+	// After staleTTL expires: API is called, ErrGone returned
+	time.Sleep(60 * time.Millisecond)
+
 	_, err = gw.CheckAccess(context.Background(), "example.com")
 	if err == nil {
-		t.Fatal("ErrGone should NOT be blocked by stale data")
+		t.Fatal("past staleTTL, ErrGone should be returned from API")
 	}
 	if !errors.Is(err, ipfs.ErrGone) {
 		t.Fatalf("expected ErrGone, got %v", err)
 	}
 }
 
-func TestCheckAccess_StaleBlockedByErrUnauthorized(t *testing.T) {
+func TestCheckAccess_ErrUnauthorizedPastStaleWindow(t *testing.T) {
 	callCount := 0
 	apiClient := &mockAPIClient{
 		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
@@ -943,7 +966,8 @@ func TestCheckAccess_StaleBlockedByErrUnauthorized(t *testing.T) {
 		},
 	}
 
-	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond)
+	staleTTL := 50 * time.Millisecond
+	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond, staleTTL, nil)
 	if err != nil {
 		t.Fatalf("NewStatusCache: %v", err)
 	}
@@ -963,9 +987,21 @@ func TestCheckAccess_StaleBlockedByErrUnauthorized(t *testing.T) {
 
 	time.Sleep(15 * time.Millisecond)
 
+	// Within staleTTL: stale active data is served
+	website, err = gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("SWR should serve stale active data, got error: %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("SWR should return stale active website")
+	}
+
+	// After staleTTL expires: API is called, ErrUnauthorized returned
+	time.Sleep(60 * time.Millisecond)
+
 	_, err = gw.CheckAccess(context.Background(), "example.com")
 	if err == nil {
-		t.Fatal("ErrUnauthorized should NOT be blocked by stale data")
+		t.Fatal("past staleTTL, ErrUnauthorized should be returned from API")
 	}
 	if !errors.Is(err, ipfs.ErrUnauthorized) {
 		t.Fatalf("expected ErrUnauthorized, got %v", err)
@@ -979,7 +1015,7 @@ func TestCheckAccess_NoStaleDataOnFreshMissWithError(t *testing.T) {
 		},
 	}
 
-	statusCache, err := cache.NewStatusCache(100, 5*time.Minute, 30*time.Second)
+	statusCache, err := cache.NewStatusCacheSimple(100, 5*time.Minute, 30*time.Second)
 	if err != nil {
 		t.Fatalf("NewStatusCache: %v", err)
 	}

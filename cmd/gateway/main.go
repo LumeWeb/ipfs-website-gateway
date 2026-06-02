@@ -134,7 +134,23 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	statusCache, err := cache.NewStatusCache(cfg.Cache.StatusCacheLRUSize, cfg.Cache.StatusCacheTTL, cfg.Cache.StatusCacheShortTTL)
+	apiClient, err := api.NewClient(cfg.API.URL, cfg.API.Secret, cfg.API.Timeout)
+	if err != nil {
+		logger.Error("failed to initialize API client", zap.Error(err))
+		return fmt.Errorf("failed to initialize API client: %w", err)
+	}
+	logger.Info("API client initialized", zap.String("url", cfg.API.URL))
+
+	// Initialize Redis client
+	redisClient, err := cache.NewRedisClient(cfg.Cache.RedisURL, cfg.Cache.RedisPassword, cfg.Cache.RedisDB, cfg.Cache.RedisKeyPrefix)
+	if err != nil {
+		logger.Error("failed to initialize Redis client", zap.Error(err))
+		return fmt.Errorf("failed to initialize Redis client: %w", err)
+	}
+	defer func() { _ = redisClient.Close() }()
+	logger.Info("Redis client initialized", zap.String("url", cfg.Cache.RedisURL))
+
+	statusCache, err := cache.NewStatusCache(cfg.Cache.StatusCacheLRUSize, cfg.Cache.StatusCacheTTL, cfg.Cache.StatusCacheShortTTL, cfg.Cache.StatusCacheStaleTTL, redisClient)
 	if err != nil {
 		logger.Error("failed to initialize status cache", zap.Error(err))
 		return fmt.Errorf("failed to initialize status cache: %w", err)
@@ -143,14 +159,10 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		zap.Int("size", cfg.Cache.StatusCacheLRUSize),
 		zap.Duration("ttl", cfg.Cache.StatusCacheTTL),
 		zap.Duration("short_ttl", cfg.Cache.StatusCacheShortTTL),
+		zap.Duration("stale_ttl", cfg.Cache.StatusCacheStaleTTL),
 	)
 
-	apiClient, err := api.NewClient(cfg.API.URL, cfg.API.Secret, cfg.API.Timeout)
-	if err != nil {
-		logger.Error("failed to initialize API client", zap.Error(err))
-		return fmt.Errorf("failed to initialize API client: %w", err)
-	}
-	logger.Info("API client initialized", zap.String("url", cfg.API.URL))
+	statusCache.SetAPIClient(apiClient)
 
 	contentCache, err := cache.NewContentCache(
 		cfg.Cache.ContentCachePath,
@@ -187,7 +199,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	srv.SetAPIClient(apiClient)
 	srv.SetStatusCache(statusCache)
 
-	gateway, err := gw.NewGateway(node.BlockService, apiClient, statusCache, logger, cfg.IPFS.RetrievalTimeout, node.Routing, cfg.Cache.IPNSCacheLRUSize, cfg.Cache.IPNSCacheFreshTTL, cfg.Cache.IPNSCachePath, cfg.IPFS.PubsubEnabled, cfg.Server.GatewayDomain)
+	gateway, err := gw.NewGateway(node.BlockService, apiClient, statusCache, logger, cfg.IPFS.RetrievalTimeout, node.Routing, cfg.Cache.IPNSCacheLRUSize, cfg.Cache.IPNSCacheFreshTTL, redisClient, cfg.IPFS.PubsubEnabled, cfg.Server.GatewayDomain)
 	if err != nil {
 		logger.Error("failed to initialize gateway", zap.Error(err))
 		return fmt.Errorf("failed to initialize gateway: %w", err)

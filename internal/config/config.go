@@ -79,12 +79,16 @@ type CacheConfig struct {
 	StatusCacheTTL         time.Duration `config:"status_cache_ttl"`
 	StatusCacheShortTTL    time.Duration `config:"status_cache_short_ttl"`
 	StatusCacheLRUSize     int           `config:"status_cache_lru_size"`
+	StatusCacheStaleTTL    time.Duration `config:"status_cache_stale_ttl"`
 	ContentCachePath     string        `config:"content_cache_path"`
 	ContentCacheMaxBytes int64         `config:"content_cache_max_bytes"`
 	ContentCacheLRUSize  int           `config:"content_cache_lru_size"`
 	IPNSCacheLRUSize     int           `config:"ipns_cache_lru_size"`
 	IPNSCacheFreshTTL    time.Duration `config:"ipns_cache_fresh_ttl"`
-	IPNSCachePath        string        `config:"ipns_cache_path"`
+	RedisURL             string        `config:"redis_url"`
+	RedisPassword        string        `config:"redis_password"`
+	RedisDB              int           `config:"redis_db"`
+	RedisKeyPrefix       string        `config:"redis_key_prefix"`
 }
 
 type PrewarmConfig struct {
@@ -167,12 +171,15 @@ func (c CacheConfig) Defaults() map[string]any {
 		"StatusCacheTTL":         5 * time.Minute,
 		"StatusCacheShortTTL":    30 * time.Second,
 		"StatusCacheLRUSize":     1000,
+		"StatusCacheStaleTTL":    10 * time.Minute,
 		"ContentCachePath":     "/data/cache",
 		"ContentCacheMaxBytes": int64(10) * 1024 * 1024 * 1024, // 10 GB
 		"ContentCacheLRUSize":  100000,
 		"IPNSCacheLRUSize":     140000,
 		"IPNSCacheFreshTTL":    30 * time.Second,
-		"IPNSCachePath":        "/data/ipns",
+		"RedisURL":             "redis://localhost:6379",
+		"RedisDB":              0,
+		"RedisKeyPrefix":       "gateway:",
 	}
 }
 
@@ -192,12 +199,16 @@ func (c CacheConfig) Schema() zog.ZogSchema {
 		"StatusCacheTTL":         zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 		"StatusCacheShortTTL":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 		"StatusCacheLRUSize":     zog.Int().GT(0).Optional(),
+		"StatusCacheStaleTTL":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 		"ContentCachePath":     zog.String().Optional(),
 		"ContentCacheMaxBytes": zog.Int64().GT(0).Optional(),
 		"ContentCacheLRUSize":  zog.Int().GT(0).Optional(),
 		"IPNSCacheLRUSize":     zog.Int().GT(0).Optional(),
 		"IPNSCacheFreshTTL":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
-		"IPNSCachePath":        zog.String().Optional(),
+		"RedisURL":             zog.String().Optional(),
+		"RedisPassword":        zog.String().Optional(),
+		"RedisDB":              zog.Int().GTE(0).LTE(15).Optional(),
+		"RedisKeyPrefix":       zog.String().Min(1).Optional(),
 	})
 }
 

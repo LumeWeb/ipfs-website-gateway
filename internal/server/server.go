@@ -216,6 +216,13 @@ func (s *Server) allowedHandler(c *echo.Context) (err error) {
 		return c.NoContent(http.StatusBadRequest)
 	}
 
+	if s.statusCache != nil && s.statusCache.IsDomainActive(domain) {
+		s.logger.Debug("status cache confirms domain active, skipping DNS+API",
+			zap.String("domain", domain),
+		)
+		return c.NoContent(http.StatusOK)
+	}
+
 	dnsLinkValid := false
 	if s.dns != nil {
 		dnsLinkPath, err := s.dns.ValidateDNSLink(ctx, domain)
@@ -370,6 +377,7 @@ type StatusCache interface {
 	Get(domain string) *types.CacheResult
 	Set(domain string, response *types.GatewayWebsiteResponse)
 	SetInvalid(domain string)
+	IsDomainActive(domain string) bool
 }
 
 // SetHealthChecker sets the health checker for the server.
