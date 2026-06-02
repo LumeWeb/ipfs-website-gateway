@@ -108,8 +108,32 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	logger.Info("starting IPFS gateway",
 		zap.String("version", "1.0.0"),
 		zap.Int("port", cfg.Server.Port),
-		zap.Bool("observability_enabled", cfg.Observability.Enabled),
 	)
+
+	if cfg.Observability.Enabled {
+		logger.Info("observability enabled",
+			zap.Bool("tracing", cfg.Observability.IsTracingEnabled()),
+			zap.Bool("metrics", cfg.Observability.IsMetricsEnabled()),
+			zap.Bool("otel_logging", cfg.Observability.IsLoggingEnabled()),
+			zap.String("service_name", cfg.Observability.ServiceName),
+		)
+		if cfg.Observability.IsTracingEnabled() {
+			logger.Info("tracing configured",
+				zap.Float64("sample_ratio", cfg.Observability.Tracing.SampleRatio),
+			)
+		}
+		if cfg.Observability.IsMetricsEnabled() {
+			logger.Info("metrics endpoint configured",
+				zap.String("path", cfg.Observability.Metrics.Path),
+				zap.Bool("basic_auth", cfg.Observability.Metrics.IsBasicAuthEnabled()),
+			)
+		}
+		if cfg.Observability.IsLoggingEnabled() {
+			logger.Info("otel logging configured",
+				zap.String("level", cfg.Observability.Logging.Level),
+			)
+		}
+	}
 
 	statusCache, err := cache.NewStatusCache(cfg.Cache.StatusCacheLRUSize, cfg.Cache.StatusCacheTTL, cfg.Cache.StatusCacheShortTTL)
 	if err != nil {
