@@ -2,18 +2,23 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
 
 	"github.com/alexliesenfeld/health"
+	"github.com/labstack/echo-contrib/echoprometheus"
 	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
+	echoMiddleware "github.com/labstack/echo/v4/middleware"
 	"golang.org/x/time/rate"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 	gw "go.lumeweb.com/ipfs-website-gateway/internal/gateway"
+	"go.lumeweb.com/ipfs-website-gateway/internal/metrics"
+	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
 )
@@ -70,8 +75,11 @@ func NewServer(cfg *config.Config, logger *zap.Logger) *Server {
 
 // setupMiddleware initializes global middleware for the server.
 func (s *Server) setupMiddleware(e *echo.Echo) {
-	e.Use(middleware.Recover())
-	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+	e.Use(echoprometheus.NewMiddlewareWithConfig(echoprometheus.MiddlewareConfig{
+		Registerer: metrics.Registerer(),
+	}))
+	e.Use(echoMiddleware.Recover())
+	e.Use(echoMiddleware.LoggerWithConfig(echoMiddleware.LoggerConfig{
 		Format: `${method} ${uri} ${status} ${remote_ip}` + "\n",
 	}))
 }
@@ -86,9 +94,30 @@ func (s *Server) InitializeRoutes() {
 func (s *Server) setupRoutes(e *echo.Echo) {
 	e.GET("/healthz", s.healthCheckHandler)
 
+	if s.config.Observability.IsMetricsEnabled() {
+		metricsPath := s.config.Observability.Metrics.Path
+		if metricsPath == "" {
+			metricsPath = "/metrics"
+		}
+
+		handler := echoprometheus.NewHandlerWithConfig(echoprometheus.HandlerConfig{
+			Gatherer: metrics.Registry(),
+		})
+
+		if s.config.Observability.Metrics.IsBasicAuthEnabled() {
+			e.GET(metricsPath, handler, echoMiddleware.BasicAuth(func(username, password string, c echo.Context) (bool, error) {
+				return subtle.ConstantTimeCompare([]byte(password), []byte(s.config.Observability.Metrics.BasicAuthPassword)) == 1, nil
+			}))
+		} else {
+			e.GET(metricsPath, handler)
+		}
+
+		s.logger.Info("Metrics endpoint enabled", zap.String("path", metricsPath))
+	}
+
 	if s.config.RateLimit.Enabled {
-		store := middleware.NewRateLimiterMemoryStoreWithConfig(
-			middleware.RateLimiterMemoryStoreConfig{
+		store := echoMiddleware.NewRateLimiterMemoryStoreWithConfig(
+			echoMiddleware.RateLimiterMemoryStoreConfig{
 				Rate:      rate.Limit(s.config.RateLimit.Rate),
 				Burst:     s.config.RateLimit.Burst,
 				ExpiresIn: s.config.RateLimit.ExpiresIn,
@@ -108,7 +137,7 @@ func (s *Server) setupRoutes(e *echo.Echo) {
 			})
 		}
 
-		rateLimitMiddleware := middleware.RateLimiterWithConfig(middleware.RateLimiterConfig{
+		rateLimitMiddleware := echoMiddleware.RateLimiterWithConfig(echoMiddleware.RateLimiterConfig{
 			Store:       store,
 			DenyHandler: denyHandler,
 		})
@@ -139,8 +168,15 @@ func (s *Server) setupRoutes(e *echo.Echo) {
 //   - 400 Bad Request: for all failures (auth, domain validation, DNSLink, API)
 //
 // SECURITY: Always returns 400 on failure to prevent information leakage.
-func (s *Server) allowedHandler(c echo.Context) error {
+func (s *Server) allowedHandler(c echo.Context) (err error) {
 	ctx := c.Request().Context()
+	ctx, span := otel.TraceMethod(ctx, "Server.allowedHandler",
+		otel.WithAttributes(
+			attribute.String("domain", c.QueryParam("domain")),
+			attribute.String("client_ip", c.RealIP()),
+		),
+	)
+	defer func() { otel.EndSpanWithErr(span, err) }()
 
 	domain := c.QueryParam("domain")
 
@@ -272,12 +308,15 @@ func isValidDomain(domain string) bool {
 }
 
 // healthCheckHandler handles health check requests.
-func (s *Server) healthCheckHandler(c echo.Context) error {
+func (s *Server) healthCheckHandler(c echo.Context) (err error) {
+	ctx, span := otel.TraceMethod(c.Request().Context(), "Server.healthCheckHandler")
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
 	if s.healthChecker == nil {
 		return c.JSON(http.StatusOK, map[string]string{"status": "up"})
 	}
 
-	result := s.healthChecker.Check(c.Request().Context())
+	result := s.healthChecker.Check(ctx)
 
 	if result.Status == health.StatusUp {
 		return c.JSON(http.StatusOK, result)

@@ -22,7 +22,10 @@ import (
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	ipfs "go.lumeweb.com/ipfs-sdk"
+	"go.lumeweb.com/ipfs-website-gateway/internal/metrics"
 	stalenamesys "go.lumeweb.com/ipfs-website-gateway/internal/namesys"
+	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
 )
@@ -114,6 +117,7 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 		DeserializedResponses: true,
 		PublicGateways:        map[string]*gateway.PublicGateway{},
 		RetrievalTimeout:      retrievalTimeout,
+		MetricsRegistry:       metrics.Registry(),
 	}
 
 	handler := gateway.NewHandler(cfg, backend)
@@ -146,24 +150,37 @@ func (g *Gateway) Backend() *gateway.BlocksBackend {
 	return g.backend
 }
 
-func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types.GatewayWebsiteResponse, err error) {
+	ctx, span := otel.TraceMethod(ctx, "Gateway.CheckAccess",
+		otel.WithAttributes(attribute.String("domain", domain)),
+	)
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
+	start := time.Now()
+
 	if g.statusCache != nil {
-		result := g.statusCache.Get(domain)
-		if result.Hit && !result.Expired && result.Entry != nil {
+		cacheResult := g.statusCache.Get(domain)
+		if cacheResult.Hit && !cacheResult.Expired && cacheResult.Entry != nil {
+			accessCheckDuration.WithLabelValues(LabelResultCacheHit).Observe(time.Since(start).Seconds())
+			accessCheckTotal.WithLabelValues(LabelResultCacheHit).Inc()
 			g.logger.Debug("status cache hit",
 				zap.String("domain", domain),
 			)
-			if result.Entry.Err != nil {
-				return nil, result.Entry.Err
+			if cacheResult.Entry.Err != nil {
+				return nil, cacheResult.Entry.Err
 			}
-			return result.Entry.Response, nil
+			return cacheResult.Entry.Response, nil
 		}
-		if result.Hit && result.Expired {
+		if cacheResult.Hit && cacheResult.Expired {
+			accessCheckDuration.WithLabelValues(LabelResultCacheExpired).Observe(time.Since(start).Seconds())
+			accessCheckTotal.WithLabelValues(LabelResultCacheExpired).Inc()
 			g.logger.Debug("status cache expired, revalidating",
 				zap.String("domain", domain),
 			)
 		}
-		if !result.Hit {
+		if !cacheResult.Hit {
+			accessCheckDuration.WithLabelValues(LabelResultCacheMiss).Observe(time.Since(start).Seconds())
+			accessCheckTotal.WithLabelValues(LabelResultCacheMiss).Inc()
 			g.logger.Debug("status cache miss",
 				zap.String("domain", domain),
 			)
@@ -176,16 +193,15 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.Gatewa
 
 	website, err := g.api.GetWebsite(ctx, domain)
 	if err != nil {
+		accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 		g.logger.Debug("website status check failed",
 			zap.String("domain", domain),
 			zap.Error(err),
 		)
 		if g.statusCache != nil {
 			if errors.Is(err, ipfs.ErrNotFound) {
-				// Domain genuinely doesn't exist on the platform — safe to cache longer
 				g.statusCache.SetError(domain, err)
 			} else {
-				// Everything else (network errors, 500s, auth issues, gone) may be transient
 				g.statusCache.SetErrorShortTTL(domain, err)
 			}
 		}
@@ -202,10 +218,18 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.Gatewa
 		}
 	}
 
+	accessCheckDuration.WithLabelValues(LabelResultAPISuccess).Observe(time.Since(start).Seconds())
+	accessCheckTotal.WithLabelValues(LabelResultAPISuccess).Inc()
+
 	return website, nil
 }
 
-func (g *Gateway) GetDNSLinkRecord(ctx context.Context, hostname string) (path.Path, error) {
+func (g *Gateway) GetDNSLinkRecord(ctx context.Context, hostname string) (_ path.Path, err error) {
+	ctx, span := otel.TraceMethod(ctx, "Gateway.GetDNSLinkRecord",
+		otel.WithAttributes(attribute.String("hostname", hostname)),
+	)
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
 	return g.backend.GetDNSLinkRecord(ctx, hostname)
 }
 
@@ -235,6 +259,14 @@ func NewAccessControlMiddleware(gw *Gateway, logger *zap.Logger) (*AccessControl
 func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
+		_, span := otel.TraceMethod(ctx, "AccessControlMiddleware.Wrap",
+			otel.WithAttributes(
+				attribute.String("host", r.Host),
+				attribute.String("path", r.URL.Path),
+				attribute.String("method", r.Method),
+			),
+		)
+		defer span.End()
 
 		host := r.Host
 		if xHost := r.Header.Get("X-Forwarded-Host"); xHost != "" {

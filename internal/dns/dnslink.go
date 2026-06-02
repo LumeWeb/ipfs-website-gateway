@@ -8,6 +8,8 @@ import (
 	"time"
 
 	dnslinkstd "github.com/dnslink-std/go"
+	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 const (
@@ -21,7 +23,12 @@ const (
 // if a valid DNSLink record is found.
 //
 // Context cancellation and timeout are respected during the DNS query.
-func ValidateDNSLink(ctx context.Context, domain string) (string, error) {
+func ValidateDNSLink(ctx context.Context, domain string) (_ string, err error) {
+	ctx, span := otel.TraceMethod(ctx, "ValidateDNSLink",
+		otel.WithAttributes(attribute.String("domain", domain)),
+	)
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
 	if domain == "" {
 		return "", fmt.Errorf("domain cannot be empty")
 	}

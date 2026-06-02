@@ -9,6 +9,7 @@ import (
 	"github.com/alexliesenfeld/health"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
+	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 )
 
@@ -47,8 +48,11 @@ func NewChecker(apiClient APIClient, ipfsNode IPFSNode) health.Checker {
 
 // checkAPIHealth verifies that the internal API is reachable and responding.
 // It attempts to query a known endpoint (using a test domain) to verify connectivity.
-func checkAPIHealth(ctx context.Context, client APIClient) error {
-	_, err := client.GetWebsite(ctx, "health-check.example.com")
+func checkAPIHealth(ctx context.Context, client APIClient) (err error) {
+	ctx, span := otel.TraceMethod(ctx, "Health.checkAPIHealth")
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
+	_, err = client.GetWebsite(ctx, "health-check.example.com")
 	if err != nil {
 		errStr := err.Error()
 		if strings.Contains(errStr, "not found") || strings.Contains(errStr, "gone") || strings.Contains(errStr, "status 404") || strings.Contains(errStr, "status 410") {
@@ -61,7 +65,10 @@ func checkAPIHealth(ctx context.Context, client APIClient) error {
 
 // checkIPFSPeerHealth verifies that the IPFS node has at least one peer connection.
 // It checks if the node has connected peers in its peer store.
-func checkIPFSPeerHealth(ctx context.Context, node IPFSNode) error {
+func checkIPFSPeerHealth(ctx context.Context, node IPFSNode) (err error) {
+	ctx, span := otel.TraceMethod(ctx, "Health.checkIPFSPeerHealth")
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
 	if node == nil {
 		return fmt.Errorf("IPFS node is not initialized")
 	}

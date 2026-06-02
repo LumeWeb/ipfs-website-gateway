@@ -32,6 +32,10 @@ import (
 	pubsubrouter "github.com/libp2p/go-libp2p-pubsub-router"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/multiformats/go-multiaddr"
+	"github.com/prometheus/client_golang/prometheus"
+	"go.lumeweb.com/ipfs-website-gateway/internal/metrics"
+	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -189,6 +193,7 @@ func (n *Node) initHost(seed string) (host.Host, error) {
 		libp2p.DisableRelay(),
 		libp2p.EnableNATService(),
 		libp2p.EnableHolePunching(),
+		libp2p.PrometheusRegisterer(prometheus.WrapRegistererWithPrefix("libp2p_", metrics.Registry())),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create libp2p host: %w", err)
@@ -197,7 +202,12 @@ func (n *Node) initHost(seed string) (host.Host, error) {
 	return h, nil
 }
 
-func resolveSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration) (*peer.AddrInfo, error) {
+func resolveSeedPeer(ctx context.Context, seedPeer string, timeout time.Duration) (_ *peer.AddrInfo, err error) {
+	ctx, span := otel.TraceMethod(ctx, "Node.resolveSeedPeer",
+		otel.WithAttributes(attribute.String("seed_peer", seedPeer)),
+	)
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
 	addr := seedPeer
 	if !strings.HasPrefix(addr, "/") {
 		addr = "/dnsaddr/" + addr
@@ -266,6 +276,11 @@ const (
 )
 
 func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
+	ctx, span := otel.TraceMethod(ctx, "Node.seedPeerWorker",
+		otel.WithAttributes(attribute.String("seed_peer", n.seedPeerAddr)),
+	)
+	defer span.End()
+
 	defer func() {
 		n.seedPeerMu.Lock()
 		if n.seedPeerWorkerID == workerID {
@@ -309,6 +324,11 @@ func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
 }
 
 func (n *Node) ConnectSeedPeer() {
+	_, span := otel.TraceMethod(n.ctx, "Node.ConnectSeedPeer",
+		otel.WithAttributes(attribute.String("seed_peer", n.seedPeerAddr)),
+	)
+	defer span.End()
+
 	n.seedPeerMu.Lock()
 	defer n.seedPeerMu.Unlock()
 
