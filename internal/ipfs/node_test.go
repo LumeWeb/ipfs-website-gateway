@@ -287,12 +287,18 @@ func TestConnectSeedPeerIdempotent(t *testing.T) {
 	node.ConnectSeedPeer()
 	node.ConnectSeedPeer()
 
-	time.Sleep(50 * time.Millisecond)
-
-	node.seedPeerMu.Lock()
-	active := node.seedPeerActive
-	cancel := node.seedPeerCancel
-	node.seedPeerMu.Unlock()
+	var active bool
+	var cancel context.CancelFunc
+	for i := 0; i < 50; i++ {
+		node.seedPeerMu.Lock()
+		active = node.seedPeerActive
+		cancel = node.seedPeerCancel
+		node.seedPeerMu.Unlock()
+		if active {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if !active {
 		t.Error("expected worker to be active after ConnectSeedPeer")
@@ -341,11 +347,16 @@ func TestSeedPeerWorkerStopsOnClose(t *testing.T) {
 	node.seedPeerConnectTimeout = 1 * time.Second
 	node.ConnectSeedPeer()
 
-	time.Sleep(50 * time.Millisecond)
-
-	node.seedPeerMu.Lock()
-	activeBefore := node.seedPeerActive
-	node.seedPeerMu.Unlock()
+	var activeBefore bool
+	for i := 0; i < 50; i++ {
+		node.seedPeerMu.Lock()
+		activeBefore = node.seedPeerActive
+		node.seedPeerMu.Unlock()
+		if activeBefore {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if !activeBefore {
 		t.Error("expected worker to be active before Close")

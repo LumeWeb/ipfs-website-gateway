@@ -258,8 +258,6 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 			"blockstore",
 			"path/resolver",
 			"unixfs",
-			"namesys",
-			"ipns",
 			"routing/http/client",
 			"routing/http/contentrouter",
 			"prewarm",

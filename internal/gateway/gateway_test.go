@@ -57,9 +57,6 @@ func TestCheckAccess_ActiveWebsite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CheckAccess: %v", err)
 	}
-	if website == nil {
-		t.Fatal("expected website, got nil")
-	}
 	if website.Status != types.StatusActive {
 		t.Errorf("expected status %s, got %s", types.StatusActive, website.Status)
 	}
@@ -85,9 +82,6 @@ func TestCheckAccess_BrokenWebsite(t *testing.T) {
 	website, err := gw.CheckAccess(context.Background(), "broken.com")
 	if err != nil {
 		t.Fatalf("CheckAccess: %v", err)
-	}
-	if website == nil {
-		t.Fatal("expected website, got nil")
 	}
 	if website.Status != types.StatusBroken {
 		t.Errorf("expected status %s, got %s", types.StatusBroken, website.Status)
@@ -712,7 +706,7 @@ func TestSubResourceErrorHandler_SwallowsErrorBody(t *testing.T) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Content-Length", "45")
 		w.WriteHeader(http.StatusGatewayTimeout)
-		w.Write([]byte("timeout occurred after finding 1 provider(s)"))
+		_, _ = w.Write([]byte("timeout occurred after finding 1 provider(s)"))
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/_astro/index.abc123.css", nil)
@@ -744,7 +738,7 @@ func TestSubResourceErrorHandler_PassesHTMLThrough(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		w.WriteHeader(http.StatusGatewayTimeout)
-		w.Write([]byte(body))
+		_, _ = w.Write([]byte(body))
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -770,7 +764,7 @@ func TestSubResourceErrorHandler_PassesSuccessThrough(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/css")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("body { color: red; }"))
+		_, _ = w.Write([]byte("body { color: red; }"))
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/style.css", nil)
@@ -788,5 +782,218 @@ func TestSubResourceErrorHandler_PassesSuccessThrough(t *testing.T) {
 	}
 	if rec.Body.String() != "body { color: red; }" {
 		t.Errorf("expected CSS body, got %q", rec.Body.String())
+	}
+}
+
+func TestCheckAccess_StaleActiveOnTransientError(t *testing.T) {
+	callCount := 0
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &types.GatewayWebsiteResponse{
+					Domain:     "example.com",
+					Status:     types.StatusActive,
+					TargetHash: "QmTest",
+					TargetType: "ipfs",
+				}, nil
+			}
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+
+	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("first CheckAccess: %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("first call should return active")
+	}
+
+	time.Sleep(15 * time.Millisecond)
+
+	website, err = gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("second CheckAccess (stale): %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("stale-while-revalidate should return cached active data despite transient error")
+	}
+}
+
+func TestCheckAccess_StaleBlockedByErrNotFound(t *testing.T) {
+	callCount := 0
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &types.GatewayWebsiteResponse{
+					Domain:     "example.com",
+					Status:     types.StatusActive,
+					TargetHash: "QmTest",
+					TargetType: "ipfs",
+				}, nil
+			}
+			return nil, fmt.Errorf("%w: website not found", ipfs.ErrNotFound)
+		},
+	}
+
+	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("first CheckAccess: %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("first call should return active")
+	}
+
+	time.Sleep(15 * time.Millisecond)
+
+	website, err = gw.CheckAccess(context.Background(), "example.com")
+	if err == nil {
+		t.Fatal("ErrNotFound should NOT be blocked by stale data")
+	}
+	if website != nil {
+		t.Fatal("ErrNotFound should return nil website")
+	}
+	if !errors.Is(err, ipfs.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestCheckAccess_StaleBlockedByErrGone(t *testing.T) {
+	callCount := 0
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &types.GatewayWebsiteResponse{
+					Domain:     "example.com",
+					Status:     types.StatusActive,
+					TargetHash: "QmTest",
+					TargetType: "ipfs",
+				}, nil
+			}
+			return nil, fmt.Errorf("%w: website is broken or deleted", ipfs.ErrGone)
+		},
+	}
+
+	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("first CheckAccess: %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("first call should return active")
+	}
+
+	time.Sleep(15 * time.Millisecond)
+
+	_, err = gw.CheckAccess(context.Background(), "example.com")
+	if err == nil {
+		t.Fatal("ErrGone should NOT be blocked by stale data")
+	}
+	if !errors.Is(err, ipfs.ErrGone) {
+		t.Fatalf("expected ErrGone, got %v", err)
+	}
+}
+
+func TestCheckAccess_StaleBlockedByErrUnauthorized(t *testing.T) {
+	callCount := 0
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &types.GatewayWebsiteResponse{
+					Domain:     "example.com",
+					Status:     types.StatusActive,
+					TargetHash: "QmTest",
+					TargetType: "ipfs",
+				}, nil
+			}
+			return nil, fmt.Errorf("%w: authentication required", ipfs.ErrUnauthorized)
+		},
+	}
+
+	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("first CheckAccess: %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("first call should return active")
+	}
+
+	time.Sleep(15 * time.Millisecond)
+
+	_, err = gw.CheckAccess(context.Background(), "example.com")
+	if err == nil {
+		t.Fatal("ErrUnauthorized should NOT be blocked by stale data")
+	}
+	if !errors.Is(err, ipfs.ErrUnauthorized) {
+		t.Fatalf("expected ErrUnauthorized, got %v", err)
+	}
+}
+
+func TestCheckAccess_NoStaleDataOnFreshMissWithError(t *testing.T) {
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+
+	statusCache, err := cache.NewStatusCache(100, 5*time.Minute, 30*time.Second)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err == nil {
+		t.Fatal("expected error when no stale data and API fails")
+	}
+	if website != nil {
+		t.Fatal("expected nil website on API failure with no stale data")
 	}
 }

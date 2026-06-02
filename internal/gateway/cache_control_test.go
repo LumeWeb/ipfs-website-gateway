@@ -70,7 +70,7 @@ func TestCacheControlMiddleware_RewritesIPFSAssetPath(t *testing.T) {
 func TestCacheControlMiddleware_IPNSImplicitWriteHeader(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=60")
-		w.Write([]byte("hello"))
+		_, _ = w.Write([]byte("hello"))
 	})
 
 	middleware := NewCacheControlMiddleware()
