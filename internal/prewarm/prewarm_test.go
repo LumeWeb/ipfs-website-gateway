@@ -64,7 +64,7 @@ func newTestBlockService(t *testing.T) blockservice.BlockService {
 
 func newTestPrewarmer(t *testing.T, bs blockservice.BlockService) *Prewarmer {
 	t.Helper()
-	p, err := NewPrewarmer(bs, zap.NewNop(), 30*time.Second, 2, 2, 1*time.Second)
+	p, err := NewPrewarmer(context.Background(), bs, zap.NewNop(), 30*time.Second, 2, 2, 1*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func newTestPrewarmer(t *testing.T, bs blockservice.BlockService) *Prewarmer {
 }
 
 func TestNewPrewarmer_NilBlockService_ReturnsError(t *testing.T) {
-	p, err := NewPrewarmer(nil, zap.NewNop(), 30*time.Second, 2, 2, 1*time.Second)
+	p, err := NewPrewarmer(context.Background(), nil, zap.NewNop(), 30*time.Second, 2, 2, 1*time.Second)
 	if p != nil {
 		t.Fatal("expected nil prewarmer")
 	}
@@ -83,7 +83,7 @@ func TestNewPrewarmer_NilBlockService_ReturnsError(t *testing.T) {
 
 func TestNewPrewarmer_DefaultConcurrency(t *testing.T) {
 	bs := newTestBlockService(t)
-	p, err := NewPrewarmer(bs, zap.NewNop(), 30*time.Second, 0, 2, 1*time.Second)
+	p, err := NewPrewarmer(context.Background(), bs, zap.NewNop(), 30*time.Second, 0, 2, 1*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestNewPrewarmer_DefaultConcurrency(t *testing.T) {
 
 func TestNewPrewarmer_NegativeConcurrency(t *testing.T) {
 	bs := newTestBlockService(t)
-	p, err := NewPrewarmer(bs, zap.NewNop(), 30*time.Second, -5, 2, 1*time.Second)
+	p, err := NewPrewarmer(context.Background(), bs, zap.NewNop(), 30*time.Second, -5, 2, 1*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestNewPrewarmer_NegativeConcurrency(t *testing.T) {
 
 func TestNewPrewarmer_DefaultRetryParams(t *testing.T) {
 	bs := newTestBlockService(t)
-	p, err := NewPrewarmer(bs, zap.NewNop(), 30*time.Second, 2, 0, 0)
+	p, err := NewPrewarmer(context.Background(), bs, zap.NewNop(), 30*time.Second, 2, 0, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +240,7 @@ func TestPrewarmer_Submit_RetriesTransientFailures(t *testing.T) {
 	faultBs := &faultInjectBlockstore{Blockstore: bs.Blockstore(), failN: 1}
 	faultBserv := blockservice.New(faultBs, nil)
 
-	p, err := NewPrewarmer(faultBserv, zap.NewNop(), 30*time.Second, 2, 3, 10*time.Millisecond)
+	p, err := NewPrewarmer(context.Background(), faultBserv, zap.NewNop(), 30*time.Second, 2, 3, 10*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +283,7 @@ func TestPrewarmer_Submit_RespectsTimeout(t *testing.T) {
 	blockingBs := &blockingBlockstore{Blockstore: bs.Blockstore(), blockCh: make(chan struct{})}
 	blockingBserv := blockservice.New(blockingBs, nil)
 
-	p, err := NewPrewarmer(blockingBserv, zap.NewNop(), 50*time.Millisecond, 2, 1, 10*time.Millisecond)
+	p, err := NewPrewarmer(context.Background(), blockingBserv, zap.NewNop(), 50*time.Millisecond, 2, 1, 10*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestPrewarmer_ConcurrentSubmits_SameCID_OnlyOneWalks(t *testing.T) {
 	ctx := context.Background()
 	bs := newTestBlockService(t)
 
-	p, err := NewPrewarmer(bs, zap.NewNop(), 30*time.Second, 2, 2, 1*time.Second)
+	p, err := NewPrewarmer(context.Background(), bs, zap.NewNop(), 30*time.Second, 2, 2, 1*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,5 +402,36 @@ func TestPrewarmer_ConcurrentSubmits_SameCID_OnlyOneWalks(t *testing.T) {
 	p.mu.Unlock()
 	if activeCount != 0 {
 		t.Fatalf("expected 0 active entries after Stop, got %d", activeCount)
+	}
+}
+
+func TestPrewarmer_ParentContextCancel_StopsWalk(t *testing.T) {
+	bs := newTestBlockService(t)
+
+	blockingBs := &blockingBlockstore{Blockstore: bs.Blockstore(), blockCh: make(chan struct{})}
+	blockingBserv := blockservice.New(blockingBs, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	p, err := NewPrewarmer(ctx, blockingBserv, zap.NewNop(), 30*time.Second, 2, 1, 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blk := makeRawBlock(t, []byte("cancel test"))
+	p.Submit(blk.Cid())
+
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		p.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop() hung — parent context cancellation should stop walk")
 	}
 }

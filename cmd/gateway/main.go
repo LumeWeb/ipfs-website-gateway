@@ -29,10 +29,11 @@ import (
 )
 
 var (
-	cfg    *config.Config
-	logger *zap.Logger
-	node   *ipfs.Node
-	srv    *server.Server
+	cfg       *config.Config
+	logger    *zap.Logger
+	node      *ipfs.Node
+	srv       *server.Server
+	prewarmer *prewarm.Prewarmer
 )
 
 type DNSValidatorAdapter struct{}
@@ -159,7 +160,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	logger.Info("Gateway handler initialized")
 
 	if cfg.Prewarm.Enabled {
-		prewarmer, err := prewarm.NewPrewarmer(node.BlockService, logger, cfg.IPFS.RetrievalTimeout, cfg.Prewarm.MaxConc, cfg.Prewarm.RetryAttempts, cfg.Prewarm.RetryDelay)
+		prewarmer, err = prewarm.NewPrewarmer(ctx, node.BlockService, logger, cfg.IPFS.RetrievalTimeout, cfg.Prewarm.MaxConc, cfg.Prewarm.RetryAttempts, cfg.Prewarm.RetryDelay)
 		if err != nil {
 			logger.Error("failed to initialize prewarmer", zap.Error(err))
 			return fmt.Errorf("failed to initialize prewarmer: %w", err)
@@ -268,6 +269,10 @@ func setupGracefulShutdown(ctx context.Context) {
 	go func() {
 		sig := <-sigChan
 		logger.Info("received shutdown signal", zap.String("signal", sig.String()))
+
+		if prewarmer != nil {
+			prewarmer.Stop()
+		}
 
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

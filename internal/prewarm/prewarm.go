@@ -16,18 +16,19 @@ import (
 )
 
 type Prewarmer struct {
-	bs           blockservice.BlockService
-	logger       *zap.Logger
-	timeout      time.Duration
+	bs            blockservice.BlockService
+	logger        *zap.Logger
+	timeout       time.Duration
 	retryAttempts uint
 	retryDelay    time.Duration
+	ctx           context.Context
 
 	mu     sync.Mutex
 	active map[string]struct{}
 	pool   *workerpool.WorkerPool
 }
 
-func NewPrewarmer(bs blockservice.BlockService, logger *zap.Logger, timeout time.Duration, maxConcurrency int, retryAttempts uint, retryDelay time.Duration) (*Prewarmer, error) {
+func NewPrewarmer(ctx context.Context, bs blockservice.BlockService, logger *zap.Logger, timeout time.Duration, maxConcurrency int, retryAttempts uint, retryDelay time.Duration) (*Prewarmer, error) {
 	if bs == nil {
 		return nil, fmt.Errorf("blockservice is required")
 	}
@@ -41,13 +42,14 @@ func NewPrewarmer(bs blockservice.BlockService, logger *zap.Logger, timeout time
 		retryDelay = 1 * time.Second
 	}
 	return &Prewarmer{
-		bs:           bs,
-		logger:       logger.Named("prewarm"),
-		timeout:      timeout,
+		bs:            bs,
+		logger:        logger.Named("prewarm"),
+		timeout:       timeout,
 		retryAttempts: retryAttempts,
 		retryDelay:    retryDelay,
-		active:       make(map[string]struct{}),
-		pool:         workerpool.New(maxConcurrency),
+		ctx:           ctx,
+		active:        make(map[string]struct{}),
+		pool:          workerpool.New(maxConcurrency),
 	}, nil
 }
 
@@ -74,7 +76,7 @@ func (p *Prewarmer) Submit(rootCID cid.Cid) {
 			p.mu.Unlock()
 		}()
 
-		ctx, cancel := context.WithTimeout(context.Background(), p.timeout)
+		ctx, cancel := context.WithTimeout(p.ctx, p.timeout)
 		defer cancel()
 
 		visited, skipped, elapsed, err := p.walk(ctx, rootCID)
