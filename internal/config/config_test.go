@@ -42,6 +42,12 @@ func TestConfigStructs(t *testing.T) {
 			ContentCacheMaxBytes: 1024 * 1024 * 1024, // 1GB
 			ContentCacheLRUSize:  100000,
 		},
+		Prewarm: PrewarmConfig{
+			Enabled:       true,
+			MaxConc:       2,
+			RetryAttempts: 2,
+			RetryDelay:    1 * time.Second,
+		},
 		Logging: LoggingConfig{
 			Level: "info",
 		},
@@ -94,6 +100,20 @@ func TestConfigStructs(t *testing.T) {
 	// Verify Logging settings
 	if cfg.Logging.Level != "info" {
 		t.Errorf("Expected Logging Level to be 'info', got '%s'", cfg.Logging.Level)
+	}
+
+	// Verify Prewarm settings
+	if cfg.Prewarm.Enabled != true {
+		t.Errorf("Expected Prewarm Enabled to be true, got %v", cfg.Prewarm.Enabled)
+	}
+	if cfg.Prewarm.MaxConc != 2 {
+		t.Errorf("Expected Prewarm MaxConc to be 2, got %d", cfg.Prewarm.MaxConc)
+	}
+	if cfg.Prewarm.RetryAttempts != 2 {
+		t.Errorf("Expected Prewarm RetryAttempts to be 2, got %d", cfg.Prewarm.RetryAttempts)
+	}
+	if cfg.Prewarm.RetryDelay != 1*time.Second {
+		t.Errorf("Expected Prewarm RetryDelay to be 1s, got %v", cfg.Prewarm.RetryDelay)
 	}
 }
 
@@ -161,6 +181,22 @@ func TestDefaultsInterface(t *testing.T) {
 	if loggingDefaults["Level"] != "info" {
 		t.Errorf("Expected default Logging.Level to be 'info', got %v", loggingDefaults["Level"])
 	}
+
+	// Test PrewarmConfig defaults
+	prewarmCfg := PrewarmConfig{}
+	prewarmDefaults := prewarmCfg.Defaults()
+	if prewarmDefaults["Enabled"] != true {
+		t.Errorf("Expected default Prewarm.Enabled to be true, got %v", prewarmDefaults["Enabled"])
+	}
+	if prewarmDefaults["MaxConc"] != 2 {
+		t.Errorf("Expected default Prewarm.MaxConc to be 2, got %v", prewarmDefaults["MaxConc"])
+	}
+	if prewarmDefaults["RetryAttempts"] != uint(2) {
+		t.Errorf("Expected default Prewarm.RetryAttempts to be 2, got %v", prewarmDefaults["RetryAttempts"])
+	}
+	if prewarmDefaults["RetryDelay"] != 1*time.Second {
+		t.Errorf("Expected default Prewarm.RetryDelay to be 1s, got %v", prewarmDefaults["RetryDelay"])
+	}
 }
 
 func TestManagerWithDefaults(t *testing.T) {
@@ -212,6 +248,18 @@ func TestManagerWithDefaults(t *testing.T) {
 	}
 	if cfg.Logging.Level != "info" {
 		t.Errorf("Expected default Logging Level to be 'info', got '%s'", cfg.Logging.Level)
+	}
+	if cfg.Prewarm.Enabled != true {
+		t.Errorf("Expected default Prewarm.Enabled to be true, got %v", cfg.Prewarm.Enabled)
+	}
+	if cfg.Prewarm.MaxConc != 2 {
+		t.Errorf("Expected default Prewarm.MaxConc to be 2, got %d", cfg.Prewarm.MaxConc)
+	}
+	if cfg.Prewarm.RetryAttempts != 2 {
+		t.Errorf("Expected default Prewarm.RetryAttempts to be 2, got %d", cfg.Prewarm.RetryAttempts)
+	}
+	if cfg.Prewarm.RetryDelay != 1*time.Second {
+		t.Errorf("Expected default Prewarm.RetryDelay to be 1s, got %v", cfg.Prewarm.RetryDelay)
 	}
 }
 
@@ -288,6 +336,7 @@ func TestManagerWithEnvironmentVariables(t *testing.T) {
 	}{
 		{"Server Port", "GATEWAY__SERVER__PORT", "9999"},
 		{"Logging Level", "GATEWAY__LOGGING__LEVEL", "error"},
+		{"Prewarm Disabled", "GATEWAY__PREWARM__ENABLED", "false"},
 	}
 
 	for _, tt := range tests {
@@ -314,6 +363,9 @@ func TestManagerWithEnvironmentVariables(t *testing.T) {
 			}
 			if tt.key == "GATEWAY__LOGGING__LEVEL" && cfg.Logging.Level != "error" {
 				t.Errorf("Expected Logging Level to be 'error' from env var, got '%s'", cfg.Logging.Level)
+			}
+			if tt.key == "GATEWAY__PREWARM__ENABLED" && cfg.Prewarm.Enabled != false {
+				t.Errorf("Expected Prewarm.Enabled to be false from env var, got %v", cfg.Prewarm.Enabled)
 			}
 		})
 	}

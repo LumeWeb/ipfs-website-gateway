@@ -52,6 +52,8 @@ func withSubPath(result namesys.Result, original path.Path) namesys.Result {
 	return namesys.Result{Path: joined, TTL: result.TTL, LastMod: result.LastMod}
 }
 
+type PrewarmCallback func(key string, newPath path.Path)
+
 type staleEntry struct {
 	result   namesys.Result
 	cachedAt time.Time
@@ -68,6 +70,7 @@ type StaleWhileRevalidateNameSystem struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	watchEnabled bool
+	prewarmFn    PrewarmCallback
 }
 
 func NewStaleWhileRevalidateNameSystem(inner namesys.NameSystem, store *IPNSStore, maxWorkers int, logger *zap.Logger) *StaleWhileRevalidateNameSystem {
@@ -93,6 +96,10 @@ func NewStaleWhileRevalidateNameSystem(inner namesys.NameSystem, store *IPNSStor
 
 func (s *StaleWhileRevalidateNameSystem) EnableWatch() {
 	s.watchEnabled = true
+}
+
+func (s *StaleWhileRevalidateNameSystem) SetPrewarmCallback(fn PrewarmCallback) {
+	s.prewarmFn = fn
 }
 
 func (s *StaleWhileRevalidateNameSystem) WarmSubscriptions() {
@@ -314,6 +321,9 @@ func (s *StaleWhileRevalidateNameSystem) revalidate(p path.Path, opts []namesys.
 
 		s.store.PutStale(key, staleEntry{result: stripSubPath(result), cachedAt: time.Now()})
 		s.startWatcher(key)
+		if s.prewarmFn != nil {
+			s.prewarmFn(key, stripSubPath(result).Path)
+		}
 		s.logger.Debug("revalidation succeeded",
 			zap.String("key", key),
 			zap.Duration("elapsed", elapsed),
@@ -389,6 +399,9 @@ func (s *StaleWhileRevalidateNameSystem) watchLoop(ctx context.Context, key stri
 				zap.String("path", key),
 				zap.String("new_path", newPath.String()),
 			)
+			if s.prewarmFn != nil {
+				s.prewarmFn(key, newPath)
+			}
 			ch = s.inner.ResolveAsync(ctx, p)
 		}
 	}

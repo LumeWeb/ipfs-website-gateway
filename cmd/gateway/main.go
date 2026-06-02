@@ -14,6 +14,9 @@ import (
 
 	ipfslog "github.com/ipfs/go-log/v2"
 
+	cid "github.com/ipfs/go-cid"
+	"github.com/ipfs/boxo/path"
+
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
@@ -21,6 +24,7 @@ import (
 	gw "go.lumeweb.com/ipfs-website-gateway/internal/gateway"
 	"go.lumeweb.com/ipfs-website-gateway/internal/health"
 	"go.lumeweb.com/ipfs-website-gateway/internal/ipfs"
+	"go.lumeweb.com/ipfs-website-gateway/internal/prewarm"
 	"go.lumeweb.com/ipfs-website-gateway/internal/server"
 )
 
@@ -154,6 +158,32 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	srv.SetGateway(gateway)
 	logger.Info("Gateway handler initialized")
 
+	if cfg.Prewarm.Enabled {
+		prewarmer, err := prewarm.NewPrewarmer(node.BlockService, logger, cfg.IPFS.RetrievalTimeout, cfg.Prewarm.MaxConc, cfg.Prewarm.RetryAttempts, cfg.Prewarm.RetryDelay)
+		if err != nil {
+			logger.Error("failed to initialize prewarmer", zap.Error(err))
+			return fmt.Errorf("failed to initialize prewarmer: %w", err)
+		}
+		gateway.SetPrewarmCallback(func(key string, resolvedPath path.Path) {
+			segments := resolvedPath.Segments()
+			if len(segments) < 2 || segments[0] != "ipfs" {
+				return
+			}
+			rootCID, err := cid.Decode(segments[1])
+			if err != nil {
+				logger.Warn("prewarm: failed to decode CID from path",
+					zap.String("path", resolvedPath.String()),
+					zap.Error(err),
+				)
+				return
+			}
+			prewarmer.Submit(rootCID)
+		})
+		logger.Info("Cache pre-warming enabled",
+			zap.Int("max_concurrency", cfg.Prewarm.MaxConc),
+		)
+	}
+
 	healthChecker := health.NewChecker(apiClient, node)
 	srv.SetHealthChecker(healthChecker)
 	logger.Info("Health checker initialized")
@@ -217,6 +247,7 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 			"ipns",
 			"routing/http/client",
 			"routing/http/contentrouter",
+			"prewarm",
 		}
 		for _, s := range subsystems {
 			_ = ipfslog.SetLogLevel(s, "debug")

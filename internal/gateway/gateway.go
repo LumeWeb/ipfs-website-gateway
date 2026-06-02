@@ -134,6 +134,10 @@ func (g *Gateway) Close() {
 	}
 }
 
+func (g *Gateway) SetPrewarmCallback(fn stalenamesys.PrewarmCallback) {
+	g.nameSys.SetPrewarmCallback(fn)
+}
+
 func (g *Gateway) Handler() http.Handler {
 	return g.handler
 }
