@@ -89,6 +89,7 @@ type CacheConfig struct {
 	RedisPassword        string        `config:"redis_password"`
 	RedisDB              int           `config:"redis_db"`
 	RedisKeyPrefix       string        `config:"redis_key_prefix"`
+	RedisInsecureTLS     bool          `config:"redis_insecure_tls"`
 }
 
 type PrewarmConfig struct {
@@ -180,6 +181,7 @@ func (c CacheConfig) Defaults() map[string]any {
 		"RedisURL":             "redis://localhost:6379",
 		"RedisDB":              0,
 		"RedisKeyPrefix":       "gateway:",
+		"RedisInsecureTLS":     false,
 	}
 }
 
@@ -209,6 +211,7 @@ func (c CacheConfig) Schema() zog.ZogSchema {
 		"RedisPassword":        zog.String().Optional(),
 		"RedisDB":              zog.Int().GTE(0).LTE(15).Optional(),
 		"RedisKeyPrefix":       zog.String().Min(1).Optional(),
+		"RedisInsecureTLS":     zog.Bool().Optional(),
 	})
 }
 
