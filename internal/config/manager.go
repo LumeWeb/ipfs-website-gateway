@@ -109,6 +109,9 @@ type ManagerDefault struct {
 	initialized bool
 	fs          FileSystem
 	lock        sync.RWMutex
+
+	cachedConfig   *Config
+	cachedConfigMu sync.RWMutex
 }
 
 // ManagerConfig holds dependencies and options required to construct a Manager.
@@ -232,41 +235,36 @@ func NewManager(opts ...ManagerOption) (*ManagerDefault, error) {
 	envSource := source.NewEnvConfigSource(ENV_PREFIX, ENV_SEPARATOR, source.WithEnvSourceGlobal())
 	m.Manager.RegisterSource(envSource) //nolint:staticcheck // QF1008: explicit selector needed for nested resolution
 
-	// Register nested config structs first (for defaults processing)
-	err = m.Manager.RegisterStruct("server", ServerConfig{}) //nolint:staticcheck // QF1008
-	if err != nil {
-		return nil, fmt.Errorf("failed to register server config: %w", err)
-	}
-	err = m.Manager.RegisterStruct("api", APIConfig{}) //nolint:staticcheck // QF1008
-	if err != nil {
-		return nil, fmt.Errorf("failed to register api config: %w", err)
-	}
-	err = m.Manager.RegisterStruct("ipfs", IPFSConfig{}) //nolint:staticcheck // QF1008
-	if err != nil {
-		return nil, fmt.Errorf("failed to register ipfs config: %w", err)
-	}
-	err = m.Manager.RegisterStruct("cache", CacheConfig{}) //nolint:staticcheck // QF1008
-	if err != nil {
-		return nil, fmt.Errorf("failed to register cache config: %w", err)
-	}
-	err = m.Manager.RegisterStruct("logging", LoggingConfig{}) //nolint:staticcheck // QF1008
-	if err != nil {
-		return nil, fmt.Errorf("failed to register logging config: %w", err)
-	}
-	err = m.Manager.RegisterStruct("rate_limit", RateLimitConfig{}) //nolint:staticcheck // QF1008
-	if err != nil {
-		return nil, fmt.Errorf("failed to register rate_limit config: %w", err)
-	}
-	err = m.Manager.RegisterStruct("prewarm", PrewarmConfig{}) //nolint:staticcheck // QF1008
-	if err != nil {
-		return nil, fmt.Errorf("failed to register prewarm config: %w", err)
+	// Each sub-struct must be registered individually so DefaultConfigSource
+	// picks up their Defaults() methods. The parent Config{} does not implement
+	// Defaults(), so the default source only walks nested structs for keys that
+	// have their own Defaults() implementation.
+	for _, s := range []struct {
+		key string
+		cfg any
+	}{
+		{"server", ServerConfig{}},
+		{"api", APIConfig{}},
+		{"ipfs", IPFSConfig{}},
+		{"cache", CacheConfig{}},
+		{"logging", LoggingConfig{}},
+		{"rate_limit", RateLimitConfig{}},
+		{"prewarm", PrewarmConfig{}},
+		{"observability", ObservabilityConfig{}},
+	} {
+		if err := m.Manager.RegisterStruct(s.key, s.cfg); err != nil {
+			return nil, fmt.Errorf("failed to register %s config: %w", s.key, err)
+		}
 	}
 
-	// Register parent Config struct (must be after nested structs)
 	err = m.Manager.RegisterStruct("", Config{}) //nolint:staticcheck // QF1008
 	if err != nil {
 		return nil, fmt.Errorf("failed to register config: %w", err)
 	}
+
+	m.Manager.Subscribe("**", func(_, _ string, _ any) {
+		m.invalidateConfig()
+	})
 
 	return m, nil
 }
@@ -310,7 +308,27 @@ func (m *ManagerDefault) SetLogger(logger *zap.Logger) {
 
 // Config returns the current configuration as a Config struct.
 func (m *ManagerDefault) Config() *Config {
-	// Use Root to decode the entire config struct
+	m.cachedConfigMu.RLock()
+	if m.cachedConfig != nil {
+		cfg := m.cachedConfig
+		m.cachedConfigMu.RUnlock()
+		return cfg
+	}
+	m.cachedConfigMu.RUnlock()
+
+	m.cachedConfigMu.Lock()
+	defer m.cachedConfigMu.Unlock()
+
+	if m.cachedConfig != nil {
+		return m.cachedConfig
+	}
+
+	cfg := m.buildConfig()
+	m.cachedConfig = cfg
+	return cfg
+}
+
+func (m *ManagerDefault) buildConfig() *Config {
 	decoded, err := m.Root(nil)
 	if err != nil {
 		if m.logger != nil {
@@ -318,12 +336,18 @@ func (m *ManagerDefault) Config() *Config {
 		}
 		return &Config{}
 	}
-	
+
 	if decoded != nil {
 		if cfg, ok := decoded.(*Config); ok {
 			return cfg
 		}
 	}
-	
+
 	return &Config{}
+}
+
+func (m *ManagerDefault) invalidateConfig() {
+	m.cachedConfigMu.Lock()
+	m.cachedConfig = nil
+	m.cachedConfigMu.Unlock()
 }
