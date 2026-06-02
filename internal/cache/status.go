@@ -48,15 +48,18 @@ func NewStatusCache(size int, ttl time.Duration, shortTTL time.Duration) (*Statu
 func (sc *StatusCache) Get(domain string) *types.CacheResult {
 	entry, ok := sc.cache.Get(domain)
 	if !ok {
+		statusCacheMissesTotal.Inc()
 		return &types.CacheResult{Hit: false, Entry: nil, Expired: false}
 	}
 
 	now := time.Now()
 	if now.After(entry.ExpiresAt) {
 		sc.cache.Remove(domain)
+		statusCacheExpiredTotal.Inc()
 		return &types.CacheResult{Hit: true, Entry: nil, Expired: true}
 	}
 
+	statusCacheHitsTotal.Inc()
 	return &types.CacheResult{Hit: true, Entry: entry, Expired: false}
 }
 

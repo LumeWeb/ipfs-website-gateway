@@ -24,6 +24,8 @@ import (
 	gw "go.lumeweb.com/ipfs-website-gateway/internal/gateway"
 	"go.lumeweb.com/ipfs-website-gateway/internal/health"
 	"go.lumeweb.com/ipfs-website-gateway/internal/ipfs"
+	"go.lumeweb.com/ipfs-website-gateway/internal/metrics"
+	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
 	"go.lumeweb.com/ipfs-website-gateway/internal/prewarm"
 	"go.lumeweb.com/ipfs-website-gateway/internal/server"
 )
@@ -84,17 +86,29 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	}
 	cfg = cfgMgr.Config()
 
+	// Must inject before any Boxo components are created (global singleton)
+	if err := metrics.InjectPrometheusAdapter(metrics.Registry()); err != nil {
+		logger.Warn("failed to inject metrics adapter, boxo metrics will be noop", zap.Error(err))
+	}
+
+	if err := otel.InitTracing(ctx, cfg.Observability, "1.0.0"); err != nil {
+		logger.Warn("failed to initialize OTel tracing", zap.Error(err))
+	}
+
 	logger, err = initLogger(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
 	defer func() { _ = logger.Sync() }()
 
+	logger = otel.InitLogger(cfg.Observability, logger)
+
 	cfgMgr.SetLogger(logger)
 
 	logger.Info("starting IPFS gateway",
 		zap.String("version", "1.0.0"),
 		zap.Int("port", cfg.Server.Port),
+		zap.Bool("observability_enabled", cfg.Observability.Enabled),
 	)
 
 	statusCache, err := cache.NewStatusCache(cfg.Cache.StatusCacheLRUSize, cfg.Cache.StatusCacheTTL, cfg.Cache.StatusCacheShortTTL)
@@ -281,6 +295,10 @@ func setupGracefulShutdown(ctx context.Context) {
 			logger.Error("server shutdown failed", zap.Error(err))
 		} else {
 			logger.Info("server shutdown complete")
+		}
+
+		if err := otel.Shutdown(shutdownCtx); err != nil {
+			logger.Error("OTel shutdown failed", zap.Error(err))
 		}
 	}()
 }

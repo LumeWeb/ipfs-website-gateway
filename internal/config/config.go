@@ -13,13 +13,14 @@ import (
 
 // Config represents the complete application configuration.
 type Config struct {
-	Server    ServerConfig    `config:"server"`
-	API       APIConfig       `config:"api"`
-	IPFS      IPFSConfig      `config:"ipfs"`
-	Cache     CacheConfig     `config:"cache"`
-	Prewarm   PrewarmConfig   `config:"prewarm"`
-	Logging   LoggingConfig   `config:"logging"`
-	RateLimit RateLimitConfig `config:"rate_limit"`
+	Server        ServerConfig        `config:"server"`
+	API           APIConfig           `config:"api"`
+	IPFS          IPFSConfig          `config:"ipfs"`
+	Cache         CacheConfig         `config:"cache"`
+	Prewarm       PrewarmConfig       `config:"prewarm"`
+	Logging       LoggingConfig       `config:"logging"`
+	RateLimit     RateLimitConfig     `config:"rate_limit"`
+	Observability ObservabilityConfig `config:"observability"`
 }
 
 // ServerConfig holds HTTP server configuration settings.
@@ -243,6 +244,96 @@ func (c RateLimitConfig) Schema() zog.ZogSchema {
 		"ExpiresIn": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
 			return *valPtr > 0 && *valPtr <= 24*time.Hour
 		}, zog.Message("expires_in must be between 0 and 24 hours")),
+	})
+}
+
+type ObservabilityConfig struct {
+	Enabled     bool               `config:"enabled"`
+	ServiceName string             `config:"service_name"`
+	DSN         string             `config:"dsn"`
+	Tracing     TracingConfig      `config:"tracing"`
+	Logging     OTelLoggingConfig  `config:"logging"`
+	Metrics     MetricsConfig      `config:"metrics"`
+}
+
+type TracingConfig struct {
+	Enabled     bool    `config:"enabled"`
+	SampleRatio float64 `config:"sample_ratio"`
+}
+
+type OTelLoggingConfig struct {
+	Enabled bool   `config:"enabled"`
+	Level   string `config:"level"`
+}
+
+type MetricsConfig struct {
+	Enabled           bool   `config:"enabled"`
+	Path              string `config:"path"`
+	BasicAuthPassword string `config:"basic_auth_password"`
+}
+
+func (o ObservabilityConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Enabled":     false,
+		"ServiceName": "ipfs-website-gateway",
+		"DSN":         "",
+	}
+}
+
+func (o ObservabilityConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Enabled":     zog.Bool().Optional(),
+		"ServiceName": zog.String().Optional(),
+		"DSN":         zog.String().Optional(),
+	})
+}
+
+func (o ObservabilityConfig) IsTracingEnabled() bool  { return o.Enabled && o.Tracing.Enabled }
+func (o ObservabilityConfig) IsLoggingEnabled() bool   { return o.Enabled && o.Logging.Enabled }
+func (o ObservabilityConfig) IsMetricsEnabled() bool   { return o.Enabled && o.Metrics.Enabled }
+func (m MetricsConfig) IsBasicAuthEnabled() bool       { return m.BasicAuthPassword != "" }
+
+func (t TracingConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Enabled":     true,
+		"SampleRatio": 1.0,
+	}
+}
+
+func (t TracingConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Enabled":     zog.Bool().Optional(),
+		"SampleRatio": zog.Float64().GTE(0.0).LTE(1.0).Optional(),
+	})
+}
+
+func (l OTelLoggingConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Enabled": true,
+		"Level":   "info",
+	}
+}
+
+func (l OTelLoggingConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Enabled": zog.Bool().Optional(),
+		"Level":   zog.String().OneOf([]string{"debug", "info", "warn", "error"}).Optional(),
+	})
+}
+
+func (m MetricsConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Enabled":           true,
+		"Path":              "/metrics",
+		"BasicAuthPassword": "",
+	}
+}
+
+func (m MetricsConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Enabled":           zog.Bool().Optional(),
+		"Path":              zog.String().Min(1).Optional(),
+		"BasicAuthPassword": zog.String().Optional(),
 	})
 }
 

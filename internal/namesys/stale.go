@@ -10,6 +10,8 @@ import (
 	"github.com/ipfs/boxo/namesys"
 	"github.com/ipfs/boxo/path"
 	ci "github.com/libp2p/go-libp2p/core/crypto"
+	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -121,7 +123,12 @@ func (s *StaleWhileRevalidateNameSystem) WarmSubscriptions() {
 	}
 }
 
-func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Path, opts ...namesys.ResolveOption) (_ namesys.Result, err error) {
+	ctx, span := otel.TraceMethod(ctx, "NameSystem.Resolve",
+		otel.WithAttributes(attribute.String("path", p.String())),
+	)
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
 	key := resolvableKey(p)
 
 	if se, ok := s.store.GetStale(key); ok {
@@ -307,6 +314,11 @@ func (s *StaleWhileRevalidateNameSystem) revalidate(p path.Path, opts []namesys.
 		ctx, cancel := context.WithTimeout(context.Background(), s.store.timeout)
 		defer cancel()
 
+		ctx, span := otel.TraceMethod(ctx, "NameSystem.revalidate",
+			otel.WithAttributes(attribute.String("key", key)),
+		)
+		defer span.End()
+
 		start := time.Now()
 		result, err := s.inner.Resolve(ctx, p, opts...)
 		elapsed := time.Since(start)
@@ -363,6 +375,11 @@ func (s *StaleWhileRevalidateNameSystem) startWatcher(key string) {
 }
 
 func (s *StaleWhileRevalidateNameSystem) watchLoop(ctx context.Context, key string, ws *watcherState, p path.Path) {
+	_, span := otel.TraceMethod(ctx, "NameSystem.watchLoop",
+		otel.WithAttributes(attribute.String("key", key)),
+	)
+	defer span.End()
+
 	defer func() {
 		if v, ok := s.watchers.Load(key); ok && v.(*watcherState) == ws {
 			s.watchers.Delete(key)

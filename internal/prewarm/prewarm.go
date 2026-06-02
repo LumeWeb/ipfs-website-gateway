@@ -12,6 +12,8 @@ import (
 	"github.com/ipfs/boxo/ipld/merkledag"
 	cid "github.com/ipfs/go-cid"
 	format "github.com/ipfs/go-ipld-format"
+	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -58,6 +60,11 @@ func NewPrewarmer(ctx context.Context, bs blockservice.BlockService, logger *zap
 // is dropped — pre-warming is best-effort and will catch up on the
 // next visitor hit.
 func (p *Prewarmer) Submit(rootCID cid.Cid) {
+	_, span := otel.TraceMethod(p.ctx, "Prewarmer.Submit",
+		otel.WithAttributes(attribute.String("root_cid", rootCID.String())),
+	)
+	defer span.End()
+
 	cidStr := rootCID.String()
 
 	p.mu.Lock()
@@ -69,11 +76,15 @@ func (p *Prewarmer) Submit(rootCID cid.Cid) {
 	p.active[cidStr] = struct{}{}
 	p.mu.Unlock()
 
+	prewarmSubmittedTotal.Inc()
+	prewarmActiveWalks.Inc()
+
 	err := p.pool.Do(func() {
 		defer func() {
 			p.mu.Lock()
 			delete(p.active, cidStr)
 			p.mu.Unlock()
+			prewarmActiveWalks.Dec()
 		}()
 
 		ctx, cancel := context.WithTimeout(p.ctx, p.timeout)
@@ -82,6 +93,7 @@ func (p *Prewarmer) Submit(rootCID cid.Cid) {
 		visited, skipped, elapsed, err := p.walk(ctx, rootCID)
 
 		if err != nil {
+			prewarmFailedTotal.Inc()
 			p.logger.Warn("prewarm walk failed",
 				zap.String("cid", cidStr),
 				zap.Int("blocks_visited", visited),
@@ -91,6 +103,7 @@ func (p *Prewarmer) Submit(rootCID cid.Cid) {
 			)
 			return
 		}
+		prewarmCompletedTotal.Inc()
 		p.logger.Info("prewarm complete",
 			zap.String("cid", cidStr),
 			zap.Int("blocks_visited", visited),
@@ -102,6 +115,7 @@ func (p *Prewarmer) Submit(rootCID cid.Cid) {
 		p.mu.Lock()
 		delete(p.active, cidStr)
 		p.mu.Unlock()
+		prewarmActiveWalks.Dec()
 		p.logger.Debug("prewarm submission dropped", zap.String("cid", cidStr), zap.Error(err))
 	}
 }
@@ -111,7 +125,12 @@ type walkStats struct {
 	skipped int
 }
 
-func (p *Prewarmer) walk(ctx context.Context, rootCID cid.Cid) (int, int, time.Duration, error) {
+func (p *Prewarmer) walk(ctx context.Context, rootCID cid.Cid) (_ int, _ int, _ time.Duration, err error) {
+	ctx, span := otel.TraceMethod(ctx, "Prewarmer.walk",
+		otel.WithAttributes(attribute.String("root_cid", rootCID.String())),
+	)
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
 	dagSvc := merkledag.NewDAGService(p.bs)
 	stats := &walkStats{}
 
@@ -132,6 +151,7 @@ func (p *Prewarmer) walk(ctx context.Context, rootCID cid.Cid) (int, int, time.D
 			return nil, fmt.Errorf("fetch node %s: %w", c, err)
 		}
 		stats.visited++
+		prewarmBlocksFetched.Inc()
 		return nd.Links(), nil
 	}
 
@@ -145,7 +165,7 @@ func (p *Prewarmer) walk(ctx context.Context, rootCID cid.Cid) (int, int, time.D
 	}
 
 	start := time.Now()
-	err := merkledag.Walk(ctx, getLinks, rootCID, func(cid.Cid) bool { return true },
+	err = merkledag.Walk(ctx, getLinks, rootCID, func(cid.Cid) bool { return true },
 		merkledag.OnError(onError),
 	)
 	elapsed := time.Since(start)

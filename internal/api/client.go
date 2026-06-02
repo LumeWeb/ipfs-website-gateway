@@ -7,6 +7,8 @@ import (
 	"time"
 
 	ipfs "go.lumeweb.com/ipfs-sdk"
+	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 )
 
@@ -35,7 +37,12 @@ func NewClientFromWebsitesService(websites ipfs.WebsitesService) APIClient {
 	return &sdkClient{websites: websites}
 }
 
-func (c *sdkClient) GetWebsite(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+func (c *sdkClient) GetWebsite(ctx context.Context, domain string) (_ *types.GatewayWebsiteResponse, err error) {
+	ctx, span := otel.TraceMethod(ctx, "APIClient.GetWebsite",
+		otel.WithAttributes(attribute.String("domain", domain)),
+	)
+	defer func() { otel.EndSpanWithErr(span, err) }()
+
 	if domain == "" {
 		return nil, fmt.Errorf("domain cannot be empty")
 	}
