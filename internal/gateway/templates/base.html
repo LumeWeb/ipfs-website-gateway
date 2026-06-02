@@ -215,6 +215,8 @@
 
         {{if eq .ContentTemplate "pending_content"}}
             {{template "pending_content" .}}
+        {{else if eq .ContentTemplate "hello_content"}}
+            {{template "hello_content" .}}
         {{else}}
             {{template "invalid_content" .}}
         {{end}}

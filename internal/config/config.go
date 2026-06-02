@@ -28,6 +28,7 @@ type ServerConfig struct {
 	Port          int      `config:"port"`
 	TrustedProxies []string `config:"trusted_proxies"`
 	AllowedSecret string   `config:"allowed_secret"`
+	GatewayDomain string   `config:"gateway_domain"`
 }
 
 // APIConfig holds external API configuration settings.
@@ -119,6 +120,7 @@ func (c ServerConfig) Schema() zog.ZogSchema {
 		"Port":           zog.Int().GTE(1).LTE(65535).Optional(),
 		"TrustedProxies": zog.Slice(zog.String()).Optional(),
 		"AllowedSecret":  zog.String().Optional(),
+		"GatewayDomain":  zog.String().Optional(),
 	})
 }
 
