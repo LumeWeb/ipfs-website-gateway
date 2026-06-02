@@ -39,6 +39,9 @@ var pendingTemplate string
 //go:embed templates/invalid_site.html
 var invalidTemplate string
 
+//go:embed templates/hello.html
+var helloTemplate string
+
 type ErrorPageData struct {
 	Title           string
 	Domain          string
@@ -49,15 +52,16 @@ type ErrorPageData struct {
 }
 
 type Gateway struct {
-	backend     *gateway.BlocksBackend
-	handler     http.Handler
-	logger      *zap.Logger
-	api         api.APIClient
-	statusCache *cache.StatusCache
-	nameSys     *stalenamesys.StaleWhileRevalidateNameSystem
+	backend       *gateway.BlocksBackend
+	handler       http.Handler
+	logger        *zap.Logger
+	api           api.APIClient
+	statusCache   *cache.StatusCache
+	nameSys       *stalenamesys.StaleWhileRevalidateNameSystem
+	gatewayDomain string
 }
 
-func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsFreshTTL time.Duration, ipnsCachePath string, pubsubEnabled bool) (*Gateway, error) {
+func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsFreshTTL time.Duration, ipnsCachePath string, pubsubEnabled bool, gatewayDomain string) (*Gateway, error) {
 	ns, err := gateway.NewDNSResolver(nil, nil)
 	if err != nil {
 		return nil, err
@@ -123,12 +127,13 @@ func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCac
 	handler := gateway.NewHandler(cfg, backend)
 
 	return &Gateway{
-		backend:     backend,
-		handler:     handler,
-		logger:      logger,
-		api:         apiClient,
-		statusCache: statusCache,
-		nameSys:     wrappedNameSystem,
+		backend:       backend,
+		handler:       handler,
+		logger:        logger,
+		api:           apiClient,
+		statusCache:   statusCache,
+		nameSys:       wrappedNameSystem,
+		gatewayDomain: gatewayDomain,
 	}, nil
 }
 
@@ -144,6 +149,10 @@ func (g *Gateway) SetPrewarmCallback(fn stalenamesys.PrewarmCallback) {
 
 func (g *Gateway) Handler() http.Handler {
 	return g.handler
+}
+
+func (g *Gateway) GatewayDomain() string {
+	return g.gatewayDomain
 }
 
 func (g *Gateway) Backend() *gateway.BlocksBackend {
@@ -267,13 +276,13 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type AccessControlMiddleware struct {
-	gateway   *Gateway
-	logger    *zap.Logger
-	templates *template.Template
+	gateway       *Gateway
+	logger        *zap.Logger
+	templates     *template.Template
 }
 
 func NewAccessControlMiddleware(gw *Gateway, logger *zap.Logger) (*AccessControlMiddleware, error) {
-	tmpl, err := template.New("base").Parse(baseTemplate + pendingTemplate + invalidTemplate)
+	tmpl, err := template.New("base").Parse(baseTemplate + pendingTemplate + invalidTemplate + helloTemplate)
 	if err != nil {
 		return nil, err
 	}
@@ -321,6 +330,12 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 		if strings.HasPrefix(r.URL.Path, "/ipfs/") || strings.HasPrefix(r.URL.Path, "/ipns/") {
 			m.logger.Debug("passing through ipfs/ipns path", zap.String("path", r.URL.Path))
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		if gwDomain := m.gateway.GatewayDomain(); gwDomain != "" && domain == gwDomain {
+			m.logger.Debug("serving gateway hello page", zap.String("domain", domain))
+			m.renderHelloPage(w, domain)
 			return
 		}
 
@@ -454,6 +469,25 @@ func (m *AccessControlMiddleware) renderPendingPage(w http.ResponseWriter, domai
 	var buf bytes.Buffer
 	if err := m.templates.ExecuteTemplate(&buf, "base", data); err != nil {
 		m.logger.Error("failed to render pending template", zap.Error(err))
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = buf.WriteTo(w)
+}
+
+func (m *AccessControlMiddleware) renderHelloPage(w http.ResponseWriter, domain string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	data := ErrorPageData{
+		Title:           "Pinner Gateway",
+		Domain:          domain,
+		ContentTemplate: "hello_content",
+	}
+
+	var buf bytes.Buffer
+	if err := m.templates.ExecuteTemplate(&buf, "base", data); err != nil {
+		m.logger.Error("failed to render hello template", zap.Error(err))
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

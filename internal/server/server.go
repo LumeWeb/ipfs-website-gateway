@@ -79,8 +79,20 @@ func (s *Server) setupMiddleware(e *echo.Echo) {
 		Registerer: metrics.Registerer(),
 	}))
 	e.Use(echoMiddleware.Recover())
-	e.Use(echoMiddleware.LoggerWithConfig(echoMiddleware.LoggerConfig{
-		Format: `${method} ${uri} ${status} ${remote_ip}` + "\n",
+	e.Use(echoMiddleware.RequestLoggerWithConfig(echoMiddleware.RequestLoggerConfig{
+		LogMethod:    true,
+		LogURI:       true,
+		LogStatus:    true,
+		LogRemoteIP:  true,
+		LogValuesFunc: func(c echo.Context, v echoMiddleware.RequestLoggerValues) error {
+			s.logger.Info("request",
+				zap.String("method", v.Method),
+				zap.String("uri", v.URI),
+				zap.Int("status", v.Status),
+				zap.String("remote_ip", v.RemoteIP),
+			)
+			return nil
+		},
 	}))
 }
 
@@ -187,6 +199,13 @@ func (s *Server) allowedHandler(c echo.Context) (err error) {
 
 	if domain == "" {
 		return c.NoContent(http.StatusBadRequest)
+	}
+
+	if s.config.Server.GatewayDomain != "" && domain == s.config.Server.GatewayDomain {
+		s.logger.Debug("gateway domain auto-allowed for TLS",
+			zap.String("domain", domain),
+		)
+		return c.NoContent(http.StatusOK)
 	}
 
 	if net.ParseIP(domain) != nil {
@@ -308,9 +327,15 @@ func isValidDomain(domain string) bool {
 }
 
 // healthCheckHandler handles health check requests.
+// Only accessible from loopback addresses (127.0.0.0/8, ::1).
 func (s *Server) healthCheckHandler(c echo.Context) (err error) {
 	ctx, span := otel.TraceMethod(c.Request().Context(), "Server.healthCheckHandler")
 	defer func() { otel.EndSpanWithErr(span, err) }()
+
+	ip := net.ParseIP(c.RealIP())
+	if ip == nil || (!ip.IsLoopback() && !ip.IsUnspecified()) {
+		return c.NoContent(http.StatusNotFound)
+	}
 
 	if s.healthChecker == nil {
 		return c.JSON(http.StatusOK, map[string]string{"status": "up"})

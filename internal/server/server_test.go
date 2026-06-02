@@ -25,9 +25,6 @@ func TestNewServer(t *testing.T) {
 	server := NewServer(cfg, logger)
 	server.InitializeRoutes()
 
-	if server == nil {
-		t.Fatal("NewServer returned nil")
-	}
 	if server.echo == nil {
 		t.Error("Server echo field is nil")
 	}
@@ -82,6 +79,7 @@ func TestServerRoutes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(tt.method, tt.path, nil)
+			req.RemoteAddr = "127.0.0.1:1234"
 			rec := httptest.NewRecorder()
 			server.echo.ServeHTTP(rec, req)
 
