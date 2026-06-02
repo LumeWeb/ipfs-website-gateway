@@ -811,6 +811,96 @@ func TestAllowedHandler_Success(t *testing.T) {
 	}
 }
 
+func TestAllowedHandler_DNSLinkFail_APIActiveFallback(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Port:           8080,
+			TrustedProxies: []string{},
+		},
+	}
+
+	server := NewServer(cfg, logger)
+
+	mockDNS := &MockDNSValidator{
+		validateFunc: func(ctx context.Context, domain string) (string, error) {
+			return "", fmt.Errorf("DNS query failed: SERVFAIL")
+		},
+	}
+	server.SetDNSValidator(mockDNS)
+
+	mockAPI := &MockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return &types.GatewayWebsiteResponse{
+				Domain:     "example.com",
+				Status:     types.StatusActive,
+				TargetType: "ipns",
+				TargetHash: "12D3KooWTest",
+			}, nil
+		},
+	}
+	server.SetAPIClient(mockAPI)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/allowed?domain="+url.QueryEscape("example.com"), nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := server.allowedHandler(c)
+
+	if err != nil {
+		t.Fatalf("allowedHandler returned error: %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status 200 (portal fallback), got %d", rec.Code)
+	}
+}
+
+func TestAllowedHandler_DNSLinkFail_APINotActive_Rejects(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Port:           8080,
+			TrustedProxies: []string{},
+		},
+	}
+
+	server := NewServer(cfg, logger)
+
+	mockDNS := &MockDNSValidator{
+		validateFunc: func(ctx context.Context, domain string) (string, error) {
+			return "", fmt.Errorf("DNS query failed: SERVFAIL")
+		},
+	}
+	server.SetDNSValidator(mockDNS)
+
+	mockAPI := &MockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return &types.GatewayWebsiteResponse{
+				Domain: "example.com",
+				Status: types.StatusBroken,
+			}, nil
+		},
+	}
+	server.SetAPIClient(mockAPI)
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/allowed?domain="+url.QueryEscape("example.com"), nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := server.allowedHandler(c)
+
+	if err != nil {
+		t.Fatalf("allowedHandler returned error: %v", err)
+	}
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 (broken site), got %d", rec.Code)
+	}
+}
+
 func TestAllowedHandler_DNSLinkValidation_LogsSuccess(t *testing.T) {
 	logger := zap.NewNop()
 	cfg := &config.Config{

@@ -181,10 +181,12 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (*types.Gatewa
 			zap.Error(err),
 		)
 		if g.statusCache != nil {
-			if errors.Is(err, ipfs.ErrGone) {
-				g.statusCache.SetErrorShortTTL(domain, err)
-			} else {
+			if errors.Is(err, ipfs.ErrNotFound) {
+				// Domain genuinely doesn't exist on the platform — safe to cache longer
 				g.statusCache.SetError(domain, err)
+			} else {
+				// Everything else (network errors, 500s, auth issues, gone) may be transient
+				g.statusCache.SetErrorShortTTL(domain, err)
 			}
 		}
 		return nil, err

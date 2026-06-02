@@ -164,29 +164,28 @@ func (s *Server) allowedHandler(c echo.Context) error {
 		return c.NoContent(http.StatusBadRequest)
 	}
 
+	dnsLinkValid := false
 	if s.dns != nil {
 		dnsLinkPath, err := s.dns.ValidateDNSLink(ctx, domain)
 		if err != nil {
-			s.logger.Debug("DNSLink validation failed",
+			s.logger.Debug("DNSLink validation failed, will attempt portal fallback",
 				zap.String("domain", domain),
 				zap.Error(err),
 			)
-			return c.NoContent(http.StatusBadRequest)
-		}
-
-		if dnsLinkPath == "" {
-			s.logger.Debug("DNSLink resolved but path is invalid",
+		} else if dnsLinkPath == "" {
+			s.logger.Debug("DNSLink resolved but path is invalid, will attempt portal fallback",
 				zap.String("domain", domain),
 			)
-			return c.NoContent(http.StatusBadRequest)
+		} else {
+			dnsLinkValid = true
+			s.logger.Debug("DNSLink validation successful",
+				zap.String("domain", domain),
+				zap.String("dnslink_path", dnsLinkPath),
+			)
 		}
-
-		s.logger.Debug("DNSLink validation successful",
-			zap.String("domain", domain),
-			zap.String("dnslink_path", dnsLinkPath),
-		)
 	} else {
 		s.logger.Warn("DNS validator not configured, skipping DNSLink validation")
+		dnsLinkValid = true
 	}
 
 	if s.api != nil {
@@ -207,10 +206,21 @@ func (s *Server) allowedHandler(c echo.Context) error {
 			return c.NoContent(http.StatusBadRequest)
 		}
 
+		if !dnsLinkValid {
+			s.logger.Info("DNSLink validation failed but portal confirms domain is active, allowing for TLS",
+				zap.String("domain", domain),
+			)
+		}
+
 		s.logger.Debug("Website status check successful",
 			zap.String("domain", domain),
 			zap.String("status", string(website.Status)),
 		)
+	} else if !dnsLinkValid {
+		s.logger.Debug("DNSLink validation failed and no API client to confirm, rejecting",
+			zap.String("domain", domain),
+		)
+		return c.NoContent(http.StatusBadRequest)
 	} else {
 		s.logger.Warn("API client not configured, skipping website status check")
 	}
