@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
@@ -244,13 +243,23 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 
 	srv.InitializeRoutes()
 
-	setupGracefulShutdown(ctx)
-
 	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	logger.Info("server starting", zap.String("addr", addr))
-	if err := srv.Start(addr); err != nil && err != http.ErrServerClosed {
+
+	ctx, stop := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := srv.Start(ctx, addr); err != nil && err != http.ErrServerClosed {
 		logger.Error("server failed", zap.Error(err))
 		return fmt.Errorf("server failed: %w", err)
+	}
+
+	if prewarmer != nil {
+		prewarmer.Stop()
+	}
+
+	if err := otel.Shutdown(context.Background()); err != nil {
+		logger.Error("OTel shutdown failed", zap.Error(err))
 	}
 
 	return nil
@@ -305,29 +314,4 @@ func initIPFSNode(ctx context.Context, cfg *config.Config, bs *cache.ContentBloc
 	return ipfs.NewNode(ctx, cfg.IPFS.SeedPeer, cfg.IPFS.ConnectTimeout, cfg.IPFS.RoutingEndpoint(), bs, logger, cfg.IPFS.PubsubEnabled, cfg.IPFS.Seed)
 }
 
-func setupGracefulShutdown(ctx context.Context) {
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		sig := <-sigChan
-		logger.Info("received shutdown signal", zap.String("signal", sig.String()))
-
-		if prewarmer != nil {
-			prewarmer.Stop()
-		}
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		if err := srv.Shutdown(shutdownCtx); err != nil {
-			logger.Error("server shutdown failed", zap.Error(err))
-		} else {
-			logger.Info("server shutdown complete")
-		}
-
-		if err := otel.Shutdown(shutdownCtx); err != nil {
-			logger.Error("OTel shutdown failed", zap.Error(err))
-		}
-	}()
-}

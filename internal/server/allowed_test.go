@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
@@ -282,6 +282,14 @@ func TestAllowedHandler_HandlesXRealIPHeader(t *testing.T) {
 	server := NewServer(cfg, logger)
 
 	e := echo.New()
+	e.IPExtractor = func(r *http.Request) string {
+		if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
+			if ip := echo.ExtractIPFromRealIPHeader(trustOptions...)(r); ip != "" {
+				return ip
+			}
+		}
+		return echo.ExtractIPFromXFFHeader(trustOptions...)(r)
+	}
 	req := httptest.NewRequest(http.MethodGet, "/allowed?domain="+url.QueryEscape("example.com"), nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Real-IP", "10.0.0.1")
