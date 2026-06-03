@@ -89,6 +89,11 @@ func NewStaleWhileRevalidateNameSystem(inner namesys.NameSystem, store *IPNSStor
 		cancel: cancel,
 	}
 	store.SetOnEvict(func(key string) {
+		if s.store.redisStale != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			s.store.redisStale.DeleteStale(ctx, key)
+			cancel()
+		}
 		if v, ok := s.watchers.LoadAndDelete(key); ok {
 			v.(*watcherState).cancel()
 		}
