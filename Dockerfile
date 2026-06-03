@@ -32,9 +32,6 @@ RUN addgroup -g 1000 gateway && \
 RUN mkdir -p /data/cache /data/ipns /etc/lumeweb/gateway && \
     chown -R gateway:gateway /data /etc/lumeweb
 
-# Declare data volumes (content cache + IPNS records)
-VOLUME ["/data/cache", "/data/ipns"]
-
 WORKDIR /app
 
 # Copy binary from builder
