@@ -91,7 +91,9 @@ func NewStaleWhileRevalidateNameSystem(inner namesys.NameSystem, store *IPNSStor
 	store.SetOnEvict(func(key string) {
 		if s.store.redisStale != nil {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			s.store.redisStale.DeleteStale(ctx, key)
+			if err := s.store.redisStale.DeleteStale(ctx, key); err != nil {
+				logger.Warn("failed to delete stale entry from Redis on eviction", zap.String("key", key), zap.Error(err))
+			}
 			cancel()
 		}
 		if v, ok := s.watchers.LoadAndDelete(key); ok {
