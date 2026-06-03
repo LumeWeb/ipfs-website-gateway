@@ -15,7 +15,7 @@ func newTestIPNSStaleStore(t *testing.T) (*IPNSStaleStore, redismock.ClientMock)
 	t.Helper()
 	client, mock := redismock.NewClientMock()
 	rc := newRedisClientWithClient(client, "gateway:")
-	store := NewIPNSStaleStore(rc, 30*time.Second, zap.NewNop())
+	store := NewIPNSStaleStore(rc, zap.NewNop())
 	return store, mock
 }
 
@@ -40,7 +40,7 @@ func TestIPNSStaleStore_PutStale(t *testing.T) {
 	}
 	data, _ := json.Marshal(entry)
 
-	mock.ExpectSet("gateway:ipns:stale:/ipns/12D3KooWabc", data, 30*time.Second).SetVal("OK")
+	mock.ExpectSet("gateway:ipns:stale:/ipns/12D3KooWabc", data, 0).SetVal("OK")
 
 	if err := store.PutStale(ctx, "/ipns/12D3KooWabc", entry); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -231,7 +231,7 @@ func TestIPNSStaleStore_LoadAllStale_SkipsNilValues(t *testing.T) {
 func TestIPNSStaleStore_CustomPrefix_Put(t *testing.T) {
 	client, mock := redismock.NewClientMock()
 	rc := newRedisClientWithClient(client, "myapp:")
-	store := NewIPNSStaleStore(rc, 30*time.Second, zap.NewNop())
+	store := NewIPNSStaleStore(rc, zap.NewNop())
 	ctx := context.Background()
 
 	entry := StaleEntry{
@@ -242,7 +242,7 @@ func TestIPNSStaleStore_CustomPrefix_Put(t *testing.T) {
 	}
 	data, _ := json.Marshal(entry)
 
-	mock.ExpectSet("myapp:ipns:stale:/ipns/12D3KooWabc", data, 30*time.Second).SetVal("OK")
+	mock.ExpectSet("myapp:ipns:stale:/ipns/12D3KooWabc", data, 0).SetVal("OK")
 
 	if err := store.PutStale(ctx, "/ipns/12D3KooWabc", entry); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -255,7 +255,7 @@ func TestIPNSStaleStore_CustomPrefix_Put(t *testing.T) {
 func TestIPNSStaleStore_CustomPrefix_Get(t *testing.T) {
 	client, mock := redismock.NewClientMock()
 	rc := newRedisClientWithClient(client, "myapp:")
-	store := NewIPNSStaleStore(rc, 30*time.Second, zap.NewNop())
+	store := NewIPNSStaleStore(rc, zap.NewNop())
 	ctx := context.Background()
 
 	entry := StaleEntry{
@@ -282,7 +282,7 @@ func TestIPNSStaleStore_CustomPrefix_Get(t *testing.T) {
 func TestIPNSStaleStore_CustomPrefix_Delete(t *testing.T) {
 	client, mock := redismock.NewClientMock()
 	rc := newRedisClientWithClient(client, "myapp:")
-	store := NewIPNSStaleStore(rc, 30*time.Second, zap.NewNop())
+	store := NewIPNSStaleStore(rc, zap.NewNop())
 	ctx := context.Background()
 
 	mock.ExpectDel("myapp:ipns:stale:/ipns/12D3KooWabc").SetVal(1)
@@ -298,7 +298,7 @@ func TestIPNSStaleStore_CustomPrefix_Delete(t *testing.T) {
 func TestIPNSStaleStore_CustomPrefix_LoadAll(t *testing.T) {
 	client, mock := redismock.NewClientMock()
 	rc := newRedisClientWithClient(client, "myapp:")
-	store := NewIPNSStaleStore(rc, 30*time.Second, zap.NewNop())
+	store := NewIPNSStaleStore(rc, zap.NewNop())
 	ctx := context.Background()
 
 	entry := StaleEntry{

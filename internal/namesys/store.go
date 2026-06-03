@@ -47,7 +47,7 @@ func NewIPNSStore(redisClient *cache.RedisClient, freshTTL time.Duration, timeou
 	s.stale = staleCache
 
 	if redisClient != nil {
-		redisStale := cache.NewIPNSStaleStore(redisClient, freshTTL, logger)
+		redisStale := cache.NewIPNSStaleStore(redisClient, logger)
 		s.redisStale = redisStale
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
@@ -20,16 +19,14 @@ type StaleEntry struct {
 }
 
 type IPNSStaleStore struct {
-	redis    *RedisClient
-	logger   *zap.Logger
-	freshTTL time.Duration
+	redis  *RedisClient
+	logger *zap.Logger
 }
 
-func NewIPNSStaleStore(redis *RedisClient, freshTTL time.Duration, logger *zap.Logger) *IPNSStaleStore {
+func NewIPNSStaleStore(redis *RedisClient, logger *zap.Logger) *IPNSStaleStore {
 	return &IPNSStaleStore{
-		redis:    redis,
-		freshTTL: freshTTL,
-		logger:   logger.Named("ipns-stale"),
+		redis:  redis,
+		logger: logger.Named("ipns-stale"),
 	}
 }
 
@@ -40,7 +37,7 @@ func (s *IPNSStaleStore) PutStale(ctx context.Context, key string, entry StaleEn
 	}
 
 	redisKey := s.redis.Key(ipnsStaleSuffix + key)
-	if err := s.redis.Client().Set(ctx, redisKey, data, s.freshTTL).Err(); err != nil {
+	if err := s.redis.Client().Set(ctx, redisKey, data, 0).Err(); err != nil {
 		return fmt.Errorf("failed to put stale entry: %w", err)
 	}
 
