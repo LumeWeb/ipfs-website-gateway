@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -263,10 +264,51 @@ func (c RateLimitConfig) Schema() zog.ZogSchema {
 	})
 }
 
+type OTLPConfig struct {
+	Endpoint  string `config:"endpoint"`
+	AuthToken string `config:"auth_token"`
+	Insecure  bool   `config:"insecure"`
+}
+
+func (o OTLPConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Endpoint":  zog.String(),
+		"AuthToken": zog.String(),
+		"Insecure":  zog.Bool(),
+	}).TestFunc(func(data any, ctx zog.Ctx) bool {
+		c, ok := data.(*OTLPConfig)
+		if !ok {
+			return true
+		}
+
+		if c.Endpoint != "" {
+			endpoint := c.Endpoint
+			if _, _, err := net.SplitHostPort(endpoint); err != nil {
+				endpoint = endpoint + ":4317"
+				if _, _, err2 := net.SplitHostPort(endpoint); err2 != nil {
+					ctx.AddIssue(ctx.Issue().SetMessage("endpoint format is invalid"))
+					return false
+				}
+				c.Endpoint = endpoint
+			}
+		}
+
+		return true
+	})
+}
+
+func (o OTLPConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Endpoint":  "",
+		"AuthToken": "",
+		"Insecure":  false,
+	}
+}
+
 type ObservabilityConfig struct {
 	Enabled     bool               `config:"enabled"`
 	ServiceName string             `config:"service_name"`
-	DSN         string             `config:"dsn"`
+	OTLP        OTLPConfig         `config:"otlp"`
 	Tracing     TracingConfig      `config:"tracing"`
 	Logging     OTelLoggingConfig  `config:"logging"`
 	Metrics     MetricsConfig      `config:"metrics"`
@@ -292,7 +334,6 @@ func (o ObservabilityConfig) Defaults() map[string]any {
 	return map[string]any{
 		"Enabled":     false,
 		"ServiceName": "ipfs-website-gateway",
-		"DSN":         "",
 	}
 }
 
@@ -300,7 +341,19 @@ func (o ObservabilityConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
 		"Enabled":     zog.Bool().Optional(),
 		"ServiceName": zog.String().Optional(),
-		"DSN":         zog.String().Optional(),
+		"OTLP":        o.OTLP.Schema(),
+	}).TestFunc(func(data any, ctx zog.Ctx) bool {
+		c, ok := data.(*ObservabilityConfig)
+		if !ok {
+			return true
+		}
+
+		if c.Enabled && c.OTLP.Endpoint == "" {
+			ctx.AddIssue(ctx.Issue().SetMessage("otlp.endpoint is required when observability is enabled"))
+			return false
+		}
+
+		return true
 	})
 }
 
