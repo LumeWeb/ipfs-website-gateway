@@ -2,72 +2,154 @@ package otel
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 
-	"github.com/uptrace/uptrace-go/uptrace"
 	"go.opentelemetry.io/contrib/bridges/otelzap"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/log/global"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
-func InitTracing(ctx context.Context, cfg config.ObservabilityConfig, version string) error {
-	if !cfg.Enabled || cfg.DSN == "" {
-		return nil
-	}
+var (
+	tracerProvider *sdktrace.TracerProvider
+	loggerProvider *sdklog.LoggerProvider
+)
 
-	options := []uptrace.Option{
-		uptrace.WithDSN(cfg.DSN),
-		uptrace.WithServiceName(cfg.ServiceName),
-		uptrace.WithServiceVersion(version),
-	}
-
-	if extraAttrs := detectResourceAttributes(ctx); len(extraAttrs) > 0 {
-		options = append(options, uptrace.WithResourceAttributes(extraAttrs...))
-	}
-
-	if cfg.IsTracingEnabled() {
-		options = append(options,
-			uptrace.WithTracingEnabled(true),
-			uptrace.WithTraceSampler(
-				sdktrace.TraceIDRatioBased(cfg.Tracing.SampleRatio),
-			),
-		)
-	} else {
-		options = append(options, uptrace.WithTracingEnabled(false))
-	}
-
-	uptrace.ConfigureOpentelemetry(options...)
-	return nil
-}
-
-func detectResourceAttributes(ctx context.Context) []attribute.KeyValue {
-	res, err := resource.New(ctx,
+func buildResource(ctx context.Context, cfg config.ObservabilityConfig) (*resource.Resource, error) {
+	opts := []resource.Option{
+		resource.WithAttributes(
+			semconv.ServiceNameKey.String(cfg.ServiceName),
+			semconv.ServiceVersionKey.String("1.0.0"),
+		),
 		resource.WithContainer(),
 		resource.WithProcess(),
 		resource.WithOS(),
 		resource.WithHost(),
-	)
-	if err != nil {
+	}
+
+	res, err := resource.New(ctx, opts...)
+	if err != nil && res != nil {
+		return res, nil
+	}
+	return res, err
+}
+
+func buildTraceExporterOptions(cfg config.OTLPConfig) []otlptracegrpc.Option {
+	opts := []otlptracegrpc.Option{
+		otlptracegrpc.WithEndpoint(cfg.Endpoint),
+	}
+
+	if cfg.AuthToken != "" {
+		opts = append(opts, otlptracegrpc.WithHeaders(map[string]string{
+			"Authorization": "Bearer " + cfg.AuthToken,
+		}))
+	}
+
+	if cfg.Insecure {
+		opts = append(opts, otlptracegrpc.WithInsecure())
+	}
+
+	return opts
+}
+
+func buildLogExporterOptions(cfg config.OTLPConfig) []otlploggrpc.Option {
+	opts := []otlploggrpc.Option{
+		otlploggrpc.WithEndpoint(cfg.Endpoint),
+	}
+
+	if cfg.AuthToken != "" {
+		opts = append(opts, otlploggrpc.WithHeaders(map[string]string{
+			"Authorization": "Bearer " + cfg.AuthToken,
+		}))
+	}
+
+	if cfg.Insecure {
+		opts = append(opts, otlploggrpc.WithInsecure())
+	}
+
+	return opts
+}
+
+func buildSampler(cfg config.TracingConfig) sdktrace.Sampler {
+	if cfg.SampleRatio >= 1.0 {
+		return sdktrace.AlwaysSample()
+	}
+	if cfg.SampleRatio <= 0.0 {
+		return sdktrace.NeverSample()
+	}
+	return sdktrace.TraceIDRatioBased(cfg.SampleRatio)
+}
+
+func InitTracing(ctx context.Context, cfg config.ObservabilityConfig, version string) error {
+	if !cfg.Enabled {
 		return nil
 	}
-	var attrs []attribute.KeyValue
-	for iter := res.Iter(); iter.Next(); {
-		attrs = append(attrs, iter.Attribute())
+
+	if cfg.OTLP.Endpoint == "" {
+		return nil
 	}
-	return attrs
+
+	res, err := buildResource(ctx, cfg)
+	if err != nil {
+		return err
+	}
+
+	if cfg.IsTracingEnabled() {
+		traceExporter, err := otlptracegrpc.New(ctx, buildTraceExporterOptions(cfg.OTLP)...)
+		if err != nil {
+			return err
+		}
+
+		tracerProvider = sdktrace.NewTracerProvider(
+			sdktrace.WithResource(res),
+			sdktrace.WithBatcher(traceExporter),
+			sdktrace.WithSampler(buildSampler(cfg.Tracing)),
+		)
+		otel.SetTracerProvider(tracerProvider)
+	} else {
+		tracerProvider = sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.NeverSample()))
+		otel.SetTracerProvider(tracerProvider)
+	}
+
+	if cfg.IsLoggingEnabled() {
+		logExporter, err := otlploggrpc.New(ctx, buildLogExporterOptions(cfg.OTLP)...)
+		if err != nil {
+			return errors.Join(err, tracerProvider.Shutdown(context.Background()))
+		}
+
+		loggerProvider = sdklog.NewLoggerProvider(
+			sdklog.WithResource(res),
+			sdklog.WithProcessor(sdklog.NewBatchProcessor(logExporter)),
+		)
+		global.SetLoggerProvider(loggerProvider)
+	}
+
+	return nil
 }
 
 func Shutdown(ctx context.Context) error {
-	return uptrace.Shutdown(ctx)
+	var errs []error
+	if tracerProvider != nil {
+		errs = append(errs, tracerProvider.Shutdown(ctx))
+	}
+	if loggerProvider != nil {
+		errs = append(errs, loggerProvider.Shutdown(ctx))
+	}
+	return errors.Join(errs...)
 }
 
 func InitLogger(cfg config.ObservabilityConfig, baseLogger *zap.Logger) *zap.Logger {
