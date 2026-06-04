@@ -289,6 +289,7 @@ func (o OTLPConfig) Schema() zog.ZogSchema {
 					ctx.AddIssue(ctx.Issue().SetMessage("endpoint format is invalid"))
 					return false
 				}
+				c.Endpoint = endpoint
 			}
 		}
 
