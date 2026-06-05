@@ -165,6 +165,12 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 	)
 	defer func() { otel.EndSpanWithErr(span, err) }()
 
+	// IP addresses are never valid DNSLink domains — reject before hitting the API.
+	if net.ParseIP(domain) != nil {
+		g.logger.Debug("rejecting IP address in CheckAccess", zap.String("domain", domain))
+		return nil, ipfs.ErrNotFound
+	}
+
 	start := time.Now()
 
 	// Cache.Get() triggers background revalidation for expired entries within staleTTL

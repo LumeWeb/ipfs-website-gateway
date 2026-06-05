@@ -109,6 +109,30 @@ func TestCheckAccess_APIDenied(t *testing.T) {
 	}
 }
 
+func TestCheckAccess_IPAddressRejected(t *testing.T) {
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			t.Fatal("API should not be called for IP address")
+			return nil, nil
+		},
+	}
+
+	gw, err := newTestGateway(apiClient, nil)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	for _, ip := range []string{"1.2.3.4", "::1", "2001:db8::1"} {
+		website, err := gw.CheckAccess(context.Background(), ip)
+		if !errors.Is(err, ipfs.ErrNotFound) {
+			t.Errorf("IP %q: expected ErrNotFound, got err=%v website=%v", ip, err, website)
+		}
+		if website != nil {
+			t.Errorf("IP %q: expected nil website", ip)
+		}
+	}
+}
+
 func TestCheckAccess_NilAPI(t *testing.T) {
 	gw, err := newTestGateway(nil, nil)
 	if err != nil {
