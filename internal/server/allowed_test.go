@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/labstack/echo/v5"
+	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
@@ -742,6 +743,10 @@ func (m *MockAPIClient) GetWebsite(ctx context.Context, domain string) (*types.G
 		return m.getWebsiteFunc(ctx, domain)
 	}
 	return nil, nil
+}
+
+func (m *MockAPIClient) Ping(_ context.Context) (*ipfs.PingResponse, error) {
+	return nil, fmt.Errorf("ping not implemented in test mock")
 }
 
 func TestAllowedHandler_Success(t *testing.T) {
