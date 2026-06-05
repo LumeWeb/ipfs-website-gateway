@@ -14,10 +14,12 @@ import (
 
 type APIClient interface {
 	GetWebsite(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error)
+	Ping(ctx context.Context) (*ipfs.PingResponse, error)
 }
 
 type sdkClient struct {
 	websites ipfs.WebsitesService
+	ping     ipfs.PingService
 }
 
 func NewClient(baseURL, secret string, timeout time.Duration) (APIClient, error) {
@@ -30,7 +32,10 @@ func NewClient(baseURL, secret string, timeout time.Duration) (APIClient, error)
 		Timeout: timeout,
 	})
 
-	return &sdkClient{websites: client.Websites()}, nil
+	return &sdkClient{
+		websites: client.Websites(),
+		ping:     client.Ping(),
+	}, nil
 }
 
 func NewClientFromWebsitesService(websites ipfs.WebsitesService) APIClient {
@@ -48,4 +53,11 @@ func (c *sdkClient) GetWebsite(ctx context.Context, domain string) (_ *types.Gat
 	}
 
 	return c.websites.GetGatewayWebsite(ctx, domain)
+}
+
+func (c *sdkClient) Ping(ctx context.Context) (*ipfs.PingResponse, error) {
+	if c.ping == nil {
+		return nil, fmt.Errorf("ping service not configured")
+	}
+	return c.ping.Ping(ctx)
 }

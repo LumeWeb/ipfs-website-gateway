@@ -28,6 +28,10 @@ func (m *mockAPIClient) GetWebsite(ctx context.Context, domain string) (*types.G
 	return nil, nil
 }
 
+func (m *mockAPIClient) Ping(_ context.Context) (*ipfs.PingResponse, error) {
+	return nil, fmt.Errorf("ping not implemented in test mock")
+}
+
 func newTestGateway(apiClient api.APIClient, statusCache *cache.StatusCache) (*Gateway, error) {
 	return &Gateway{
 		logger:      zap.NewNop(),
