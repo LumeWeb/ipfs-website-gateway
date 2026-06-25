@@ -7,9 +7,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+	"time"
 
 	"github.com/labstack/echo/v5"
 	ipfs "go.lumeweb.com/ipfs-sdk"
+	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
@@ -948,5 +950,176 @@ func TestAllowedHandler_DNSLinkValidation_LogsSuccess(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", rec.Code)
+	}
+}
+
+func TestAllowedHandler_ContextCanceledReturns503(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Port:           8080,
+			TrustedProxies: []string{},
+		},
+	}
+
+	server := NewServer(cfg, logger)
+	server.SetDNSValidator(&MockDNSValidator{
+		validateFunc: func(ctx context.Context, domain string) (string, error) {
+			return "/ipfs/QmSomeCID", nil
+		},
+	})
+	server.SetAPIClient(&MockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return nil, context.Canceled
+		},
+	})
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/allowed?domain=example.com", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := server.allowedHandler(c)
+	if err != nil {
+		t.Fatalf("allowedHandler returned error: %v", err)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503 for context.Canceled, got %d", rec.Code)
+	}
+}
+
+func TestAllowedHandler_ContextDeadlineExceededReturns503(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Port:           8080,
+			TrustedProxies: []string{},
+		},
+	}
+
+	server := NewServer(cfg, logger)
+	server.SetDNSValidator(&MockDNSValidator{
+		validateFunc: func(ctx context.Context, domain string) (string, error) {
+			return "/ipfs/QmSomeCID", nil
+		},
+	})
+	server.SetAPIClient(&MockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return nil, context.DeadlineExceeded
+		},
+	})
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/allowed?domain=example.com", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := server.allowedHandler(c)
+	if err != nil {
+		t.Fatalf("allowedHandler returned error: %v", err)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503 for context.DeadlineExceeded, got %d", rec.Code)
+	}
+}
+
+func TestAllowedHandler_WrappedContextCanceledReturns503(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Port:           8080,
+			TrustedProxies: []string{},
+		},
+	}
+
+	server := NewServer(cfg, logger)
+	server.SetDNSValidator(&MockDNSValidator{
+		validateFunc: func(ctx context.Context, domain string) (string, error) {
+			return "/ipfs/QmSomeCID", nil
+		},
+	})
+	server.SetAPIClient(&MockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return nil, fmt.Errorf("GetWebsite: %w", context.Canceled)
+		},
+	})
+
+	e := echo.New()
+	req := httptest.NewRequest(http.MethodGet, "/allowed?domain=example.com", nil)
+	rec := httptest.NewRecorder()
+	c := e.NewContext(req, rec)
+
+	err := server.allowedHandler(c)
+	if err != nil {
+		t.Fatalf("allowedHandler returned error: %v", err)
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503 for wrapped context.Canceled, got %d", rec.Code)
+	}
+}
+
+func TestAllowedHandler_ContextCanceledNotCachedInStatusCache(t *testing.T) {
+	logger := zap.NewNop()
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			Port:           8080,
+			TrustedProxies: []string{},
+		},
+	}
+
+	server := NewServer(cfg, logger)
+	server.SetDNSValidator(&MockDNSValidator{
+		validateFunc: func(ctx context.Context, domain string) (string, error) {
+			return "/ipfs/QmSomeCID", nil
+		},
+	})
+
+	callCount := 0
+	server.SetAPIClient(&MockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, context.Canceled
+			}
+			return &types.GatewayWebsiteResponse{
+				Domain:     "example.com",
+				Status:     types.StatusActive,
+				TargetHash: "QmTest",
+				TargetType: "ipfs",
+			}, nil
+		},
+	})
+
+	statusCache, err := cache.NewStatusCacheSimple(100, 5*time.Minute, 30*time.Second)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+	server.SetStatusCache(statusCache)
+
+	e := echo.New()
+
+	// First call: context canceled, should return 503 and NOT cache the error
+	req1 := httptest.NewRequest(http.MethodGet, "/allowed?domain=example.com", nil)
+	rec1 := httptest.NewRecorder()
+	c1 := e.NewContext(req1, rec1)
+	if err := server.allowedHandler(c1); err != nil {
+		t.Fatalf("first allowedHandler: %v", err)
+	}
+	if rec1.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Expected 503 on first call, got %d", rec1.Code)
+	}
+
+	// Second call: should hit the API again (not return cached error)
+	req2 := httptest.NewRequest(http.MethodGet, "/allowed?domain=example.com", nil)
+	rec2 := httptest.NewRecorder()
+	c2 := e.NewContext(req2, rec2)
+	if err := server.allowedHandler(c2); err != nil {
+		t.Fatalf("second allowedHandler: %v", err)
+	}
+	if rec2.Code != http.StatusOK {
+		t.Errorf("Expected 200 on second call (not cached), got %d", rec2.Code)
+	}
+	if callCount != 2 {
+		t.Errorf("Expected API to be called twice, got %d", callCount)
 	}
 }
