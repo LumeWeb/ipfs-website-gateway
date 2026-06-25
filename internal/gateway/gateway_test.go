@@ -1061,3 +1061,150 @@ func TestCheckAccess_NoStaleDataOnFreshMissWithError(t *testing.T) {
 		t.Fatal("expected nil website on API failure with no stale data")
 	}
 }
+
+func TestCheckAccess_ContextCanceledNotCached(t *testing.T) {
+	callCount := 0
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, context.Canceled
+			}
+			return &types.GatewayWebsiteResponse{
+				Domain:     "example.com",
+				Status:     types.StatusActive,
+				TargetHash: "QmTest",
+				TargetType: "ipfs",
+			}, nil
+		},
+	}
+
+	statusCache, err := cache.NewStatusCacheSimple(100, 5*time.Minute, 30*time.Second)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	// First call: context.Canceled, should NOT be cached
+	_, err = gw.CheckAccess(context.Background(), "example.com")
+	if err == nil {
+		t.Fatal("expected context.Canceled error on first call")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	// Second call: should hit API again (not return cached error)
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("second CheckAccess should succeed, got: %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("second call should return active website")
+	}
+	if callCount != 2 {
+		t.Errorf("Expected API called twice, got %d", callCount)
+	}
+}
+
+func TestCheckAccess_DeadlineExceededNotCached(t *testing.T) {
+	callCount := 0
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, context.DeadlineExceeded
+			}
+			return &types.GatewayWebsiteResponse{
+				Domain:     "example.com",
+				Status:     types.StatusActive,
+				TargetHash: "QmTest",
+				TargetType: "ipfs",
+			}, nil
+		},
+	}
+
+	statusCache, err := cache.NewStatusCacheSimple(100, 5*time.Minute, 30*time.Second)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	// First call: DeadlineExceeded, should NOT be cached
+	_, err = gw.CheckAccess(context.Background(), "example.com")
+	if err == nil {
+		t.Fatal("expected context.DeadlineExceeded error on first call")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context.DeadlineExceeded, got %v", err)
+	}
+
+	// Second call: should hit API again
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("second CheckAccess should succeed, got: %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("second call should return active website")
+	}
+	if callCount != 2 {
+		t.Errorf("Expected API called twice, got %d", callCount)
+	}
+}
+
+func TestCheckAccess_WrappedContextCanceledNotCached(t *testing.T) {
+	callCount := 0
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, fmt.Errorf("GetWebsite: %w", context.Canceled)
+			}
+			return &types.GatewayWebsiteResponse{
+				Domain:     "example.com",
+				Status:     types.StatusActive,
+				TargetHash: "QmTest",
+				TargetType: "ipfs",
+			}, nil
+		},
+	}
+
+	statusCache, err := cache.NewStatusCacheSimple(100, 5*time.Minute, 30*time.Second)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	// First call: wrapped context.Canceled, should NOT be cached
+	_, err = gw.CheckAccess(context.Background(), "example.com")
+	if err == nil {
+		t.Fatal("expected error on first call")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected wrapped context.Canceled, got %v", err)
+	}
+
+	// Second call: should hit API again
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("second CheckAccess should succeed, got: %v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("second call should return active website")
+	}
+	if callCount != 2 {
+		t.Errorf("Expected API called twice, got %d", callCount)
+	}
+}

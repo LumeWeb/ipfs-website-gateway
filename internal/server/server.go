@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -250,6 +251,13 @@ func (s *Server) allowedHandler(c *echo.Context) (err error) {
 	if s.api != nil {
 		website, err := s.api.GetWebsite(ctx, domain)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				s.logger.Debug("website status check canceled, returning 503",
+					zap.String("domain", domain),
+					zap.Error(err),
+				)
+				return c.NoContent(http.StatusServiceUnavailable)
+			}
 			s.logger.Debug("Website status check failed",
 				zap.String("domain", domain),
 				zap.Error(err),

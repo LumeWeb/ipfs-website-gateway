@@ -232,6 +232,9 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 			}
 			return nil, err
 		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		if g.statusCache != nil {
 			g.statusCache.SetErrorShortTTL(domain, err)
 		}
