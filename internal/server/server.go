@@ -12,6 +12,7 @@ import (
 
 	"github.com/alexliesenfeld/health"
 	"github.com/labstack/echo-contrib/v5/echoprometheus"
+	echootel "github.com/labstack/echo-opentelemetry"
 	"github.com/labstack/echo/v5"
 	echoMiddleware "github.com/labstack/echo/v5/middleware"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
@@ -73,6 +74,7 @@ func NewServer(cfg *config.Config, logger *zap.Logger) *Server {
 
 // setupMiddleware initializes global middleware for the server.
 func (s *Server) setupMiddleware(e *echo.Echo) {
+	e.Use(echootel.NewMiddleware("ipfs-website-gateway"))
 	e.Use(echoprometheus.NewMiddlewareWithConfig(echoprometheus.MiddlewareConfig{
 		Registerer: metrics.Registerer(),
 	}))
