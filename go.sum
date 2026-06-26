@@ -384,6 +384,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/labstack/echo-contrib/v5 v5.0.1 h1:Z23m8p1F9Doax+pa8ek8ll5d6wvzCbvrAn25ZWmSgrE=
 github.com/labstack/echo-contrib/v5 v5.0.1/go.mod h1:ajrqEwSloW0vQSTfJ4j9u4tHoS+dg4umCDPxuTvChZs=
+github.com/labstack/echo-opentelemetry v0.0.2 h1:zNzIDYf2uXSYgpBXcuwRELrnOOFSRvMaC41DTF80ke8=
+github.com/labstack/echo-opentelemetry v0.0.2/go.mod h1:kBwoqFuXPxpM9fxbs++asMsI42uOufQjuYJut3qqg6w=
 github.com/labstack/echo/v5 v5.1.1 h1:4QkvKoS8ps5ch49t8b72QS9Z581ytgxhTzxuB/CBA2I=
 github.com/labstack/echo/v5 v5.1.1/go.mod h1:SyvlSdObGjRXeQfCCXW/sybkZdOOQZBmpKF0bvALaeo=
 github.com/libp2p/go-buffer-pool v0.1.0 h1:oK4mSFcQz7cTQIfqbe4MIj9gLW+mnanjyFtc6cdF0Y8=
@@ -689,8 +691,6 @@ go.lumeweb.com/event/v2 v2.1.0 h1:pVWRzrHAkjhXa+owzhDTtaxBHbnxrsIpDHFZwEUxKoY=
 go.lumeweb.com/event/v2 v2.1.0/go.mod h1:e1Ss7iATIrP1b2Ojwbp1wdF0VTuxFXHdI7szkAG40AI=
 go.lumeweb.com/ipfs-content v0.1.17 h1:q8OvyyLemdHhnZbBtDu2TXadG/LtL2i+d70bhzDJDNw=
 go.lumeweb.com/ipfs-content v0.1.17/go.mod h1:7A9SuJDpHLZ78zz9dbrWNPfD8oZ9na4BWULXsPq+smY=
-go.lumeweb.com/ipfs-sdk v0.1.47 h1:ovQ9eW5a+80hkrAodrz3QJMFNIdeDJ0ksHECQAMS5CU=
-go.lumeweb.com/ipfs-sdk v0.1.47/go.mod h1:kN9v6CLllZfFBSCYBLJN+ZE2urIdGYcztYyArd7kD8Y=
 go.lumeweb.com/ipfs-sdk v0.1.49 h1:ZKZXxwyTjIuxlkLpeOzovywhPyDADgbe0IqnsEznFBs=
 go.lumeweb.com/ipfs-sdk v0.1.49/go.mod h1:ey3vHXmGf7fo8H2b58J2ZYrmEiRyAZphot9kgn8iyBM=
 go.opencensus.io v0.21.0/go.mod h1:mSImk1erAIZhrmZN+AvHh14ztQfjbGwt4TtuofqLduU=
@@ -708,6 +708,8 @@ go.opentelemetry.io/contrib/bridges/otelzap v0.19.0 h1:48Eq3xxFx2KlL/tF7lnl42kKJ
 go.opentelemetry.io/contrib/bridges/otelzap v0.19.0/go.mod h1:cQbV77F0u6HmtZPiQD9oxp2esaOEb4uLqIta6OFIKOk=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0 h1:7iP2uCb7sGddAr30RRS6xjKy7AZ2JtTOPA3oolgVSw8=
 go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0/go.mod h1:c7hN3ddxs/z6q9xwvfLPk+UHlWRQyaeR1LdgfL/66l0=
+go.opentelemetry.io/contrib/propagators/b3 v1.39.0 h1:PI7pt9pkSnimWcp5sQhUA9OzLbc3Ba4sL+VEUTNsxrk=
+go.opentelemetry.io/contrib/propagators/b3 v1.39.0/go.mod h1:5gV/EzPnfYIwjzj+6y8tbGW2PKWhcsz5e/7twptRVQY=
 go.opentelemetry.io/otel v1.44.0 h1:JjwHmHpA4iZ3wBxluu2fbbE7j4kqlE8jXyAyPXH7HqU=
 go.opentelemetry.io/otel v1.44.0/go.mod h1:BMgjTHL9WPRlRjL2oZCBTL4whCGtXch2H4BhOPIAyYc=
 go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.20.0 h1:rydZ9sxbcFdm/oWrVyfLTjHIygMgv0bEeMd+3B/BvoM=

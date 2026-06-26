@@ -19,6 +19,7 @@ require (
 	github.com/ipfs/go-log/v2 v2.9.1
 	github.com/ipfs/go-metrics-interface v0.3.0
 	github.com/labstack/echo-contrib/v5 v5.0.1
+	github.com/labstack/echo-opentelemetry v0.0.2
 	github.com/labstack/echo/v5 v5.1.1
 	github.com/libp2p/go-libp2p v0.47.0
 	github.com/libp2p/go-libp2p-pubsub v0.16.0
