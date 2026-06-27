@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"crypto/rand"
@@ -23,15 +24,16 @@ import (
 	"github.com/ipfs/boxo/routing/http/contentrouter"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/libp2p/go-libp2p"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	pubsubrouter "github.com/libp2p/go-libp2p-pubsub-router"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/routing"
-	pubsub "github.com/libp2p/go-libp2p-pubsub"
-	pubsubrouter "github.com/libp2p/go-libp2p-pubsub-router"
-	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/multiformats/go-multiaddr"
+	madns "github.com/multiformats/go-multiaddr-dns"
 	"github.com/prometheus/client_golang/prometheus"
 	"go.lumeweb.com/ipfs-website-gateway/internal/metrics"
 	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
@@ -58,6 +60,8 @@ type Node struct {
 	seedPeerConnectTimeout time.Duration
 	seedPeerWg             sync.WaitGroup
 	seedPeerWorkerID       [8]byte
+	seedPeerID             peer.ID
+	seedPeerConnected      atomic.Bool
 }
 
 func NewNode(ctx context.Context, seedPeer string, connectTimeout time.Duration, routingEndpoint string, bs blockstore.Blockstore, logger *zap.Logger, pubsubEnabled bool, seed string) (*Node, error) {
@@ -273,8 +277,15 @@ func resolveDNSRecursive(ctx context.Context, ma multiaddr.Multiaddr) ([]multiad
 const (
 	seedPeerInitialBackoff = 1 * time.Second
 	seedPeerMaxBackoff     = 60 * time.Second
+	seedPeerReconnectDelay = 5 * time.Second
 )
 
+// seedPeerWorker runs a persistent loop that:
+//  1. Resolves and connects to the seed peer (with retries + backoff)
+//  2. Registers a networkNotify to detect disconnects
+//  3. On disconnect, re-enters the connect loop
+//
+// The worker exits only when ctx is cancelled.
 func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
 	ctx, span := otel.TraceMethod(ctx, "Node.seedPeerWorker",
 		otel.WithAttributes(attribute.String("seed_peer", n.seedPeerAddr)),
@@ -291,6 +302,92 @@ func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
 		n.seedPeerWg.Done()
 	}()
 
+	disconnected := make(chan struct{}, 1)
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Phase 1: connect with retries + backoff
+		peerInfo, err := n.connectSeedPeerWithRetry(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			n.logger.Error("seed peer worker exhausted retries, will retry from scratch", zap.Error(err))
+			seedPeerConnected.Set(0)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(seedPeerMaxBackoff):
+				continue
+			}
+		}
+
+		n.seedPeerMu.Lock()
+		n.seedPeerID = peerInfo.ID
+		n.seedPeerMu.Unlock()
+
+		// Phase 2: monitor for disconnect
+		var notifyOnce sync.Once
+		notify := &network.NotifyBundle{
+			DisconnectedF: func(_ network.Network, conn network.Conn) {
+				if conn.RemotePeer() == peerInfo.ID {
+					notifyOnce.Do(func() {
+						select {
+						case disconnected <- struct{}{}:
+						default:
+						}
+					})
+				}
+			},
+		}
+		n.Host.Network().Notify(notify)
+		seedPeerConnected.Set(1)
+
+		// Check if already disconnected (race between connect and notify)
+		if !n.isConnectedTo(peerInfo.ID) {
+			notifyOnce.Do(func() {
+				select {
+				case disconnected <- struct{}{}:
+				default:
+				}
+			})
+		}
+
+		n.logger.Info("seed peer connected, monitoring for disconnects",
+			zap.String("peer_id", peerInfo.ID.String()))
+
+		// Phase 3: wait for disconnect or shutdown
+		select {
+		case <-ctx.Done():
+			n.Host.Network().StopNotify(notify)
+			seedPeerConnected.Set(0)
+			return
+		case <-disconnected:
+			n.Host.Network().StopNotify(notify)
+			seedPeerConnected.Set(0)
+			seedPeerDisconnects.Inc()
+			n.logger.Warn("seed peer disconnected, will reconnect",
+				zap.String("peer_id", peerInfo.ID.String()))
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(seedPeerReconnectDelay):
+		}
+	}
+}
+
+// connectSeedPeerWithRetry resolves and connects to the seed peer, retrying
+// with exponential backoff. It also populates the peerstore and protects the
+// connection BEFORE attempting to connect, so libp2p has the addresses
+// available for reconnection.
+func (n *Node) connectSeedPeerWithRetry(ctx context.Context) (*peer.AddrInfo, error) {
+	var lastPeerInfo *peer.AddrInfo
+
 	err := retry.New(
 		retry.Context(ctx),
 		retry.Attempts(0),
@@ -298,6 +395,7 @@ func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
 		retry.MaxDelay(seedPeerMaxBackoff),
 		retry.DelayType(retry.BackOffDelay),
 		retry.OnRetry(func(attempt uint, err error) {
+			seedPeerConnectErrors.Inc()
 			n.logger.Warn("seed peer connect failed, retrying",
 				zap.String("peer", n.seedPeerAddr),
 				zap.Uint("attempt", attempt),
@@ -305,22 +403,47 @@ func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
 			)
 		}),
 	).Do(func() error {
+		seedPeerConnectAttempts.Inc()
+
 		peerInfo, err := resolveSeedPeer(ctx, n.seedPeerAddr, n.seedPeerConnectTimeout)
 		if err != nil {
 			return fmt.Errorf("resolve: %w", err)
 		}
-		if err := n.Host.Connect(ctx, *peerInfo); err != nil {
-			return fmt.Errorf("connect: %w", err)
-		}
+
+		// Populate peerstore and protect BEFORE connecting, so libp2p
+		// has the addresses available for its own reconnection logic.
 		n.Host.Peerstore().AddAddrs(peerInfo.ID, peerInfo.Addrs, peerstore.PermanentAddrTTL)
 		n.Host.ConnManager().Protect(peerInfo.ID, "seed-peer")
 		n.Host.ConnManager().TagPeer(peerInfo.ID, "seed-peer", 100)
-		n.logger.Info("connected to seed peer", zap.String("peer_id", peerInfo.ID.String()))
+
+		if err := n.Host.Connect(ctx, *peerInfo); err != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
+
+		lastPeerInfo = peerInfo
 		return nil
 	})
-	if err != nil && ctx.Err() == nil {
-		n.logger.Error("seed peer worker exited unexpectedly", zap.Error(err))
+
+	if err != nil {
+		return nil, err
 	}
+	return lastPeerInfo, nil
+}
+
+// isConnectedTo returns true if the host has an active connection to the
+// given peer.
+func (n *Node) isConnectedTo(p peer.ID) bool {
+	for _, conn := range n.Host.Network().ConnsToPeer(p) {
+		if !conn.IsClosed() {
+			return true
+		}
+	}
+	return false
+}
+
+// SeedPeerConnected reports whether the seed peer is currently connected.
+func (n *Node) SeedPeerConnected() bool {
+	return n.seedPeerConnected.Load()
 }
 
 func (n *Node) ConnectSeedPeer() {
