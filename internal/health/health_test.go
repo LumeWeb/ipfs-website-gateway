@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/alexliesenfeld/health"
-	ipfs "go.lumeweb.com/ipfs-sdk"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
+	ipfs "go.lumeweb.com/ipfs-sdk"
 )
 
 type mockPingService struct {
@@ -25,8 +25,9 @@ func (m *mockPingService) Ping(ctx context.Context) (*ipfs.PingResponse, error) 
 }
 
 type mockIPFSNode struct {
-	connected bool
-	addrs     []multiaddr.Multiaddr
+	connected         bool
+	addrs             []multiaddr.Multiaddr
+	seedPeerConnected bool
 }
 
 func (m *mockIPFSNode) PeerID() peer.ID {
@@ -34,10 +35,7 @@ func (m *mockIPFSNode) PeerID() peer.ID {
 }
 
 func (m *mockIPFSNode) Addrs() []multiaddr.Multiaddr {
-	if m.connected {
-		return m.addrs
-	}
-	return []multiaddr.Multiaddr{}
+	return m.addrs
 }
 
 func (m *mockIPFSNode) Close() error {
@@ -51,10 +49,14 @@ func (m *mockIPFSNode) ConnectedPeers() []peer.ID {
 	return []peer.ID{}
 }
 
+func (m *mockIPFSNode) SeedPeerConnected() bool {
+	return m.seedPeerConnected
+}
+
 func TestNewChecker(t *testing.T) {
 	t.Run("creates checker with valid dependencies", func(t *testing.T) {
 		mockPing := &mockPingService{}
-		mockIPFS := &mockIPFSNode{connected: true}
+		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true}
 
 		checker := NewChecker(mockPing, mockIPFS)
 
@@ -68,7 +70,7 @@ func TestHealthChecks(t *testing.T) {
 	t.Run("internal_api check passes when API is healthy", func(t *testing.T) {
 		mockPing := &mockPingService{err: nil}
 		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: true, addrs: []multiaddr.Multiaddr{addr}}
+		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true, addrs: []multiaddr.Multiaddr{addr}}
 
 		checker := NewChecker(mockPing, mockIPFS)
 
@@ -101,7 +103,7 @@ func TestHealthChecks(t *testing.T) {
 	t.Run("internal_api check fails when API is unreachable", func(t *testing.T) {
 		mockPing := &mockPingService{err: fmt.Errorf("connection refused")}
 		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: true, addrs: []multiaddr.Multiaddr{addr}}
+		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true, addrs: []multiaddr.Multiaddr{addr}}
 
 		checker := NewChecker(mockPing, mockIPFS)
 
@@ -138,7 +140,7 @@ func TestHealthChecks(t *testing.T) {
 	t.Run("ipfs_peer check passes when peer is connected", func(t *testing.T) {
 		mockPing := &mockPingService{err: nil}
 		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: true, addrs: []multiaddr.Multiaddr{addr}}
+		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true, addrs: []multiaddr.Multiaddr{addr}}
 
 		checker := NewChecker(mockPing, mockIPFS)
 
@@ -168,9 +170,10 @@ func TestHealthChecks(t *testing.T) {
 		}
 	})
 
-	t.Run("ipfs_peer check fails when peer is not connected", func(t *testing.T) {
+	t.Run("ipfs_peer check fails when seed peer is not connected", func(t *testing.T) {
 		mockPing := &mockPingService{err: nil}
-		mockIPFS := &mockIPFSNode{connected: false}
+		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
+		mockIPFS := &mockIPFSNode{connected: false, seedPeerConnected: false, addrs: []multiaddr.Multiaddr{addr}}
 
 		checker := NewChecker(mockPing, mockIPFS)
 
@@ -202,11 +205,49 @@ func TestHealthChecks(t *testing.T) {
 		if ipfsCheckResult.Error == nil {
 			t.Error("expected error to be set for failed check")
 		}
+
+		errStr := ipfsCheckResult.Error.Error()
+		if !strings.Contains(errStr, "seed peer") {
+			t.Errorf("expected error to mention 'seed peer', got: %s", errStr)
+		}
+	})
+
+	t.Run("ipfs_peer check fails when connected but seed peer disconnected", func(t *testing.T) {
+		mockPing := &mockPingService{err: nil}
+		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
+		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: false, addrs: []multiaddr.Multiaddr{addr}}
+
+		checker := NewChecker(mockPing, mockIPFS)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		result := checker.Check(ctx)
+
+		if result.Status != health.StatusDown {
+			t.Errorf("expected status %s, got %s", health.StatusDown, result.Status)
+		}
+
+		var ipfsCheckResult *health.CheckResult
+		for name, check := range result.Details {
+			if name == "ipfs_peer" {
+				ipfsCheckResult = &check
+				break
+			}
+		}
+
+		if ipfsCheckResult == nil {
+			t.Fatal("expected ipfs_peer check to be present")
+		}
+
+		if ipfsCheckResult.Status != health.StatusDown {
+			t.Errorf("expected ipfs_peer status %s, got %s", health.StatusDown, ipfsCheckResult.Status)
+		}
 	})
 
 	t.Run("both checks fail when both dependencies are unhealthy", func(t *testing.T) {
 		mockPing := &mockPingService{err: fmt.Errorf("connection refused")}
-		mockIPFS := &mockIPFSNode{connected: false}
+		mockIPFS := &mockIPFSNode{connected: false, seedPeerConnected: false}
 
 		checker := NewChecker(mockPing, mockIPFS)
 
@@ -235,7 +276,7 @@ func TestHealthCheckTimeout(t *testing.T) {
 	t.Run("health check respects context timeout", func(t *testing.T) {
 		mockPing := &mockPingService{err: nil}
 		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: true, addrs: []multiaddr.Multiaddr{addr}}
+		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true, addrs: []multiaddr.Multiaddr{addr}}
 
 		checker := NewChecker(mockPing, mockIPFS)
 
@@ -258,8 +299,9 @@ func TestIPFSPeerHealthWithMultiplePeers(t *testing.T) {
 		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
 
 		mockIPFS := &mockIPFSNode{
-			connected: true,
-			addrs:     []multiaddr.Multiaddr{addr},
+			connected:         true,
+			seedPeerConnected: true,
+			addrs:             []multiaddr.Multiaddr{addr},
 		}
 
 		checker := NewChecker(mockPing, mockIPFS)
@@ -296,8 +338,9 @@ func TestIPFSPeerHealthNoAddresses(t *testing.T) {
 		mockPing := &mockPingService{err: nil}
 
 		mockIPFS := &mockIPFSNode{
-			connected: true,
-			addrs:     []multiaddr.Multiaddr{},
+			connected:         true,
+			seedPeerConnected: true,
+			addrs:             []multiaddr.Multiaddr{},
 		}
 
 		checker := NewChecker(mockPing, mockIPFS)

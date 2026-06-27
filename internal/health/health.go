@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/alexliesenfeld/health"
-	ipfs "go.lumeweb.com/ipfs-sdk"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
+	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
 )
 
@@ -21,6 +21,7 @@ type IPFSNode interface {
 	Addrs() []multiaddr.Multiaddr
 	Close() error
 	ConnectedPeers() []peer.ID
+	SeedPeerConnected() bool
 }
 
 func NewChecker(pingSvc PingService, ipfsNode IPFSNode) health.Checker {
@@ -65,9 +66,8 @@ func checkIPFSPeerHealth(ctx context.Context, node IPFSNode) (err error) {
 		return fmt.Errorf("IPFS node is not listening on any addresses")
 	}
 
-	peers := node.ConnectedPeers()
-	if len(peers) == 0 {
-		return fmt.Errorf("IPFS node has no peer connections")
+	if !node.SeedPeerConnected() {
+		return fmt.Errorf("seed peer is not connected")
 	}
 
 	return nil
