@@ -316,6 +316,7 @@ func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
 				return
 			}
 			n.logger.Error("seed peer worker exhausted retries, will retry from scratch", zap.Error(err))
+			n.seedPeerConnected.Store(false)
 			seedPeerConnected.Set(0)
 			select {
 			case <-ctx.Done():
@@ -344,6 +345,7 @@ func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
 			},
 		}
 		n.Host.Network().Notify(notify)
+		n.seedPeerConnected.Store(true)
 		seedPeerConnected.Set(1)
 
 		// Check if already disconnected (race between connect and notify)
@@ -363,10 +365,12 @@ func (n *Node) seedPeerWorker(ctx context.Context, workerID [8]byte) {
 		select {
 		case <-ctx.Done():
 			n.Host.Network().StopNotify(notify)
+			n.seedPeerConnected.Store(false)
 			seedPeerConnected.Set(0)
 			return
 		case <-disconnected:
 			n.Host.Network().StopNotify(notify)
+			n.seedPeerConnected.Store(false)
 			seedPeerConnected.Set(0)
 			seedPeerDisconnects.Inc()
 			n.logger.Warn("seed peer disconnected, will reconnect",
