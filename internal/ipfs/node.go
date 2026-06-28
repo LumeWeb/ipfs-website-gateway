@@ -22,6 +22,8 @@ import (
 	"github.com/ipfs/boxo/ipns"
 	drclient "github.com/ipfs/boxo/routing/http/client"
 	"github.com/ipfs/boxo/routing/http/contentrouter"
+	blocks "github.com/ipfs/go-block-format"
+	cid "github.com/ipfs/go-cid"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -544,6 +546,10 @@ func (n *Node) Addrs() []multiaddr.Multiaddr {
 
 func (n *Node) ConnectedPeers() []peer.ID {
 	return n.Host.Network().Peers()
+}
+
+func (n *Node) GetBlock(ctx context.Context, c cid.Cid) (blocks.Block, error) {
+	return n.BlockService.GetBlock(ctx, c)
 }
 
 func CreateInMemoryBlockstore(ctx context.Context) (blockstore.Blockstore, error) {

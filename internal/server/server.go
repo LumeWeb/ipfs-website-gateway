@@ -20,8 +20,8 @@ import (
 	gw "go.lumeweb.com/ipfs-website-gateway/internal/gateway"
 	"go.lumeweb.com/ipfs-website-gateway/internal/metrics"
 	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -34,14 +34,14 @@ var trustOptions = []echo.TrustOption{
 
 // Server wraps an Echo instance with application-specific configuration.
 type Server struct {
-	echo         *echo.Echo
-	config       *config.Config
-	logger       *zap.Logger
-	dns          DNSValidator
-	api          api.APIClient
-	statusCache  StatusCache
+	echo          *echo.Echo
+	config        *config.Config
+	logger        *zap.Logger
+	dns           DNSValidator
+	api           api.APIClient
+	statusCache   StatusCache
 	healthChecker health.Checker
-	gateway      *gw.Gateway
+	gateway       *gw.Gateway
 }
 
 // NewServer creates and configures a new Echo server instance.
@@ -80,10 +80,10 @@ func (s *Server) setupMiddleware(e *echo.Echo) {
 	}))
 	e.Use(echoMiddleware.Recover())
 	e.Use(echoMiddleware.RequestLoggerWithConfig(echoMiddleware.RequestLoggerConfig{
-		LogMethod:    true,
-		LogURI:       true,
-		LogStatus:    true,
-		LogRemoteIP:  true,
+		LogMethod:   true,
+		LogURI:      true,
+		LogStatus:   true,
+		LogRemoteIP: true,
 		LogValuesFunc: func(c *echo.Context, v echoMiddleware.RequestLoggerValues) error {
 			s.logger.Info("request",
 				zap.String("method", v.Method),
@@ -363,7 +363,6 @@ func (s *Server) healthCheckHandler(c *echo.Context) (err error) {
 	return c.JSON(http.StatusServiceUnavailable, result)
 }
 
-
 // Start begins serving HTTP requests. Blocks until ctx is cancelled, then gracefully shuts down.
 func (s *Server) Start(ctx context.Context, addr string) error {
 	sc := echo.StartConfig{
@@ -379,8 +378,6 @@ func (s *Server) Start(ctx context.Context, addr string) error {
 type DNSValidator interface {
 	ValidateDNSLink(ctx context.Context, domain string) (string, error)
 }
-
-
 
 // StatusCache defines the interface for caching website status.
 type StatusCache interface {
@@ -413,4 +410,3 @@ func (s *Server) SetStatusCache(cache StatusCache) {
 func (s *Server) SetGateway(g *gw.Gateway) {
 	s.gateway = g
 }
-

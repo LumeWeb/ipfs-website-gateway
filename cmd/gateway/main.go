@@ -13,8 +13,8 @@ import (
 
 	ipfslog "github.com/ipfs/go-log/v2"
 
-	cid "github.com/ipfs/go-cid"
 	"github.com/ipfs/boxo/path"
+	cid "github.com/ipfs/go-cid"
 
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
@@ -241,9 +241,21 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		)
 	}
 
-	healthChecker := health.NewChecker(apiClient, node)
+	healthChecker := health.NewChecker(health.CheckerOptions{
+		PingSvc:     apiClient,
+		IPFSNode:    node,
+		DNSResolver: dnsValidator,
+		Config: health.HealthCheckConfig{
+			Websites: cfg.HealthCheck.Websites,
+			Interval: cfg.HealthCheck.Interval,
+			Timeout:  cfg.HealthCheck.Timeout,
+		},
+	})
 	srv.SetHealthChecker(healthChecker)
-	logger.Info("Health checker initialized")
+	logger.Info("Health checker initialized",
+		zap.Strings("websites", cfg.HealthCheck.Websites),
+		zap.Duration("interval", cfg.HealthCheck.Interval),
+	)
 
 	if cfg.RateLimit.Enabled {
 		logger.Info("Rate limiting enabled",
@@ -325,5 +337,3 @@ func initLogger(cfg *config.Config) (*zap.Logger, error) {
 func initIPFSNode(ctx context.Context, cfg *config.Config, bs *cache.ContentBlockstore, logger *zap.Logger) (*ipfs.Node, error) {
 	return ipfs.NewNode(ctx, cfg.IPFS.SeedPeer, cfg.IPFS.ConnectTimeout, cfg.IPFS.RoutingEndpoint(), bs, logger, cfg.IPFS.PubsubEnabled, cfg.IPFS.Seed)
 }
-
-
