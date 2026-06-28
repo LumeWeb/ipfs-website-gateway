@@ -76,7 +76,7 @@ func (spc *StatusPersistentCache) Set(ctx context.Context, domain string, entry 
 		return fmt.Errorf("failed to marshal status entry: %w", err)
 	}
 
-	ttl := time.Until(entry.ExpiresAt)
+	ttl := time.Until(entry.ExpiresAt).Round(time.Second)
 	if ttl <= 0 {
 		return nil
 	}

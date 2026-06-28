@@ -168,7 +168,7 @@ func TestStatusPersistentCache_Set(t *testing.T) {
 		ExpiresAt: entry.ExpiresAt,
 	}
 	data, _ := json.Marshal(pe)
-	ttl := time.Until(entry.ExpiresAt)
+	ttl := time.Until(entry.ExpiresAt).Round(time.Second)
 
 	mock.ExpectSet("gateway:status:example.com", data, ttl).SetVal("OK")
 
@@ -216,7 +216,7 @@ func TestStatusPersistentCache_Set_ErrorEntry(t *testing.T) {
 		ExpiresAt: entry.ExpiresAt,
 	}
 	data, _ := json.Marshal(pe)
-	ttl := time.Until(entry.ExpiresAt)
+	ttl := time.Until(entry.ExpiresAt).Round(time.Second)
 
 	mock.ExpectSet("gateway:status:slow.com", data, ttl).SetVal("OK")
 
@@ -404,7 +404,7 @@ func TestStatusPersistentCache_CustomPrefix_Set(t *testing.T) {
 		ExpiresAt: entry.ExpiresAt,
 	}
 	data, _ := json.Marshal(pe)
-	ttl := time.Until(entry.ExpiresAt)
+	ttl := time.Until(entry.ExpiresAt).Round(time.Second)
 
 	mock.ExpectSet("myapp:status:example.com", data, ttl).SetVal("OK")
 

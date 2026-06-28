@@ -22,14 +22,41 @@ type Config struct {
 	Logging       LoggingConfig       `config:"logging"`
 	RateLimit     RateLimitConfig     `config:"rate_limit"`
 	Observability ObservabilityConfig `config:"observability"`
+	HealthCheck   HealthCheckConfig   `config:"health_check"`
+}
+
+// HealthCheckConfig holds configuration for periodic gateway health checks.
+type HealthCheckConfig struct {
+	Websites []string      `config:"websites"`
+	Interval time.Duration `config:"interval"`
+	Timeout  time.Duration `config:"timeout"`
+}
+
+func (c HealthCheckConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Interval": 1 * time.Minute,
+		"Timeout":  15 * time.Second,
+	}
+}
+
+func (c HealthCheckConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Websites": zog.Slice(zog.String()).Optional(),
+		"Interval": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
+			return *valPtr >= 10*time.Second
+		}),
+		"Timeout": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
+			return *valPtr > 0
+		}),
+	})
 }
 
 // ServerConfig holds HTTP server configuration settings.
 type ServerConfig struct {
-	Port          int      `config:"port"`
+	Port           int      `config:"port"`
 	TrustedProxies []string `config:"trusted_proxies"`
-	AllowedSecret string   `config:"allowed_secret"`
-	GatewayDomain string   `config:"gateway_domain"`
+	AllowedSecret  string   `config:"allowed_secret"`
+	GatewayDomain  string   `config:"gateway_domain"`
 }
 
 // APIConfig holds external API configuration settings.
@@ -77,10 +104,10 @@ func (c IPFSConfig) RoutingEndpoint() string {
 
 // CacheConfig holds caching configuration settings for both status and content.
 type CacheConfig struct {
-	StatusCacheTTL         time.Duration `config:"status_cache_ttl"`
-	StatusCacheShortTTL    time.Duration `config:"status_cache_short_ttl"`
-	StatusCacheLRUSize     int           `config:"status_cache_lru_size"`
-	StatusCacheStaleTTL    time.Duration `config:"status_cache_stale_ttl"`
+	StatusCacheTTL       time.Duration `config:"status_cache_ttl"`
+	StatusCacheShortTTL  time.Duration `config:"status_cache_short_ttl"`
+	StatusCacheLRUSize   int           `config:"status_cache_lru_size"`
+	StatusCacheStaleTTL  time.Duration `config:"status_cache_stale_ttl"`
 	ContentCachePath     string        `config:"content_cache_path"`
 	ContentCacheMaxBytes int64         `config:"content_cache_max_bytes"`
 	ContentCacheLRUSize  int           `config:"content_cache_lru_size"`
@@ -140,8 +167,8 @@ func (c APIConfig) Defaults() map[string]any {
 // Schema implements the ConfigSchemaProvider interface for Zog validation.
 func (c APIConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
-		"URL":     zog.String().Optional(),
-		"Secret":  zog.String().Optional(),
+		"URL":    zog.String().Optional(),
+		"Secret": zog.String().Optional(),
 		"Timeout": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
 			return *valPtr > 0
 		}, zog.Message("timeout must be greater than 0")),
@@ -163,17 +190,17 @@ func (c IPFSConfig) Schema() zog.ZogSchema {
 		"SeedPeer":         zog.String().Optional(),
 		"ConnectTimeout":   zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 		"RetrievalTimeout": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
-		"Seed": zog.String().Required(zog.Message("seed is required")),
+		"Seed":             zog.String().Required(zog.Message("seed is required")),
 	})
 }
 
 // Defaults implements the Defaults interface for providing default configuration values.
 func (c CacheConfig) Defaults() map[string]any {
 	return map[string]any{
-		"StatusCacheTTL":         5 * time.Minute,
-		"StatusCacheShortTTL":    30 * time.Second,
-		"StatusCacheLRUSize":     1000,
-		"StatusCacheStaleTTL":    10 * time.Minute,
+		"StatusCacheTTL":       5 * time.Minute,
+		"StatusCacheShortTTL":  30 * time.Second,
+		"StatusCacheLRUSize":   1000,
+		"StatusCacheStaleTTL":  10 * time.Minute,
 		"ContentCachePath":     "/data/cache",
 		"ContentCacheMaxBytes": int64(10) * 1024 * 1024 * 1024, // 10 GB
 		"ContentCacheLRUSize":  100000,
@@ -199,10 +226,10 @@ func (c PrewarmConfig) Defaults() map[string]any {
 // Schema implements the ConfigSchemaProvider interface for Zog validation.
 func (c CacheConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
-		"StatusCacheTTL":         zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
-		"StatusCacheShortTTL":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
-		"StatusCacheLRUSize":     zog.Int().GT(0).Optional(),
-		"StatusCacheStaleTTL":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"StatusCacheTTL":       zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"StatusCacheShortTTL":  zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"StatusCacheLRUSize":   zog.Int().GT(0).Optional(),
+		"StatusCacheStaleTTL":  zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
 		"ContentCachePath":     zog.String().Optional(),
 		"ContentCacheMaxBytes": zog.Int64().GT(0).Optional(),
 		"ContentCacheLRUSize":  zog.Int().GT(0).Optional(),
@@ -255,9 +282,9 @@ func (c RateLimitConfig) Defaults() map[string]any {
 // and ExpiresIn must be (0,24h].
 func (c RateLimitConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
-		"Enabled":   zog.Bool().Optional(),
-		"Rate":      zog.Float64().GT(0).LTE(1000).Optional(),
-		"Burst":     zog.Int().GT(0).Optional(),
+		"Enabled": zog.Bool().Optional(),
+		"Rate":    zog.Float64().GT(0).LTE(1000).Optional(),
+		"Burst":   zog.Int().GT(0).Optional(),
 		"ExpiresIn": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
 			return *valPtr > 0 && *valPtr <= 24*time.Hour
 		}, zog.Message("expires_in must be between 0 and 24 hours")),
@@ -306,12 +333,12 @@ func (o OTLPConfig) Defaults() map[string]any {
 }
 
 type ObservabilityConfig struct {
-	Enabled     bool               `config:"enabled"`
-	ServiceName string             `config:"service_name"`
-	OTLP        OTLPConfig         `config:"otlp"`
-	Tracing     TracingConfig      `config:"tracing"`
-	Logging     OTelLoggingConfig  `config:"logging"`
-	Metrics     MetricsConfig      `config:"metrics"`
+	Enabled     bool              `config:"enabled"`
+	ServiceName string            `config:"service_name"`
+	OTLP        OTLPConfig        `config:"otlp"`
+	Tracing     TracingConfig     `config:"tracing"`
+	Logging     OTelLoggingConfig `config:"logging"`
+	Metrics     MetricsConfig     `config:"metrics"`
 }
 
 type TracingConfig struct {
@@ -357,10 +384,10 @@ func (o ObservabilityConfig) Schema() zog.ZogSchema {
 	})
 }
 
-func (o ObservabilityConfig) IsTracingEnabled() bool  { return o.Enabled && o.Tracing.Enabled }
-func (o ObservabilityConfig) IsLoggingEnabled() bool   { return o.Enabled && o.Logging.Enabled }
-func (o ObservabilityConfig) IsMetricsEnabled() bool   { return o.Enabled && o.Metrics.Enabled }
-func (m MetricsConfig) IsBasicAuthEnabled() bool       { return m.BasicAuthPassword != "" }
+func (o ObservabilityConfig) IsTracingEnabled() bool { return o.Enabled && o.Tracing.Enabled }
+func (o ObservabilityConfig) IsLoggingEnabled() bool { return o.Enabled && o.Logging.Enabled }
+func (o ObservabilityConfig) IsMetricsEnabled() bool { return o.Enabled && o.Metrics.Enabled }
+func (m MetricsConfig) IsBasicAuthEnabled() bool     { return m.BasicAuthPassword != "" }
 
 func (t TracingConfig) Defaults() map[string]any {
 	return map[string]any{
@@ -405,7 +432,3 @@ func (m MetricsConfig) Schema() zog.ZogSchema {
 		"BasicAuthPassword": zog.String().Optional(),
 	})
 }
-
-
-
-
