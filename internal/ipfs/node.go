@@ -20,8 +20,12 @@ import (
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
 	"github.com/ipfs/boxo/ipns"
+	"github.com/ipfs/boxo/namesys"
+	"github.com/ipfs/boxo/path"
 	drclient "github.com/ipfs/boxo/routing/http/client"
 	"github.com/ipfs/boxo/routing/http/contentrouter"
+	blocks "github.com/ipfs/go-block-format"
+	cid "github.com/ipfs/go-cid"
 	ds "github.com/ipfs/go-datastore"
 	"github.com/libp2p/go-libp2p"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
@@ -544,6 +548,37 @@ func (n *Node) Addrs() []multiaddr.Multiaddr {
 
 func (n *Node) ConnectedPeers() []peer.ID {
 	return n.Host.Network().Peers()
+}
+
+func (n *Node) GetBlock(ctx context.Context, c cid.Cid) (blocks.Block, error) {
+	return n.BlockService.GetBlock(ctx, c)
+}
+
+// ResolveIPNS resolves an /ipns/{name} path to the root content CID using
+// the node's routing layer (HTTP routing + pubsub). This is the same
+// resolution path the gateway uses for production IPNS requests.
+func (n *Node) ResolveIPNS(ctx context.Context, ipnsPath string) (cid.Cid, error) {
+	if n.Routing == nil {
+		return cid.Cid{}, fmt.Errorf("routing unavailable: no routing endpoint configured")
+	}
+
+	p, err := path.NewPath(ipnsPath)
+	if err != nil {
+		return cid.Cid{}, fmt.Errorf("invalid IPNS path %q: %w", ipnsPath, err)
+	}
+
+	resolver := namesys.NewIPNSResolver(n.Routing)
+	result, err := resolver.Resolve(ctx, p)
+	if err != nil {
+		return cid.Cid{}, fmt.Errorf("IPNS resolution failed for %q: %w", ipnsPath, err)
+	}
+
+	c, err := cid.Decode(strings.TrimPrefix(result.Path.String(), "/ipfs/"))
+	if err != nil {
+		return cid.Cid{}, fmt.Errorf("resolved path %q does not contain a valid CID: %w", result.Path.String(), err)
+	}
+
+	return c, nil
 }
 
 func CreateInMemoryBlockstore(ctx context.Context) (blockstore.Blockstore, error) {

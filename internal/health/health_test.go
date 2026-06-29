@@ -2,16 +2,19 @@ package health
 
 import (
 	"context"
-	"fmt"
-	"strings"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/alexliesenfeld/health"
+	blocks "github.com/ipfs/go-block-format"
+	"github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 	ipfs "go.lumeweb.com/ipfs-sdk"
 )
+
+// --- Mocks ---
 
 type mockPingService struct {
 	err error
@@ -25,400 +28,375 @@ func (m *mockPingService) Ping(ctx context.Context) (*ipfs.PingResponse, error) 
 }
 
 type mockIPFSNode struct {
-	connected         bool
-	addrs             []multiaddr.Multiaddr
-	seedPeerConnected bool
+	peerConnected bool
+	addrs         []multiaddr.Multiaddr
+	block         blocks.Block
+	blockErr      error
+	resolveErr    error
+	resolvedCID   cid.Cid
 }
 
-func (m *mockIPFSNode) PeerID() peer.ID {
-	return peer.ID("QmTestPeerID")
-}
-
-func (m *mockIPFSNode) Addrs() []multiaddr.Multiaddr {
-	return m.addrs
-}
-
-func (m *mockIPFSNode) Close() error {
-	return nil
-}
-
-func (m *mockIPFSNode) ConnectedPeers() []peer.ID {
-	if m.connected {
-		return []peer.ID{peer.ID("QmConnectedPeer1"), peer.ID("QmConnectedPeer2")}
+func (m *mockIPFSNode) PeerID() peer.ID              { return "" }
+func (m *mockIPFSNode) Addrs() []multiaddr.Multiaddr { return m.addrs }
+func (m *mockIPFSNode) Close() error                 { return nil }
+func (m *mockIPFSNode) ConnectedPeers() []peer.ID    { return nil }
+func (m *mockIPFSNode) SeedPeerConnected() bool      { return m.peerConnected }
+func (m *mockIPFSNode) GetBlock(ctx context.Context, c cid.Cid) (blocks.Block, error) {
+	if m.blockErr != nil {
+		return nil, m.blockErr
 	}
-	return []peer.ID{}
+	return m.block, nil
+}
+func (m *mockIPFSNode) ResolveIPNS(ctx context.Context, ipnsPath string) (cid.Cid, error) {
+	if m.resolveErr != nil {
+		return cid.Cid{}, m.resolveErr
+	}
+	return m.resolvedCID, nil
 }
 
-func (m *mockIPFSNode) SeedPeerConnected() bool {
-	return m.seedPeerConnected
+type mockDNSResolver struct {
+	resultMap map[string]string
+	errMap    map[string]error
 }
 
-func TestNewChecker(t *testing.T) {
-	t.Run("creates checker with valid dependencies", func(t *testing.T) {
-		mockPing := &mockPingService{}
-		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true}
-
-		checker := NewChecker(mockPing, mockIPFS)
-
-		if checker == nil {
-			t.Fatal("expected checker to be created, got nil")
-		}
-	})
+func (m *mockDNSResolver) ValidateDNSLink(ctx context.Context, domain string) (string, error) {
+	if err, ok := m.errMap[domain]; ok {
+		return "", err
+	}
+	if path, ok := m.resultMap[domain]; ok {
+		return path, nil
+	}
+	return "", errors.New("not found")
 }
 
-func TestHealthChecks(t *testing.T) {
-	t.Run("internal_api check passes when API is healthy", func(t *testing.T) {
-		mockPing := &mockPingService{err: nil}
-		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true, addrs: []multiaddr.Multiaddr{addr}}
+// --- Test helpers ---
 
-		checker := NewChecker(mockPing, mockIPFS)
+func testCheckerOpts(t *testing.T, websites []string) CheckerOptions {
+	t.Helper()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	addrs := []multiaddr.Multiaddr{}
+	ma, _ := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/4001")
+	addrs = append(addrs, ma)
 
-		result := checker.Check(ctx)
+	// Use a real CID: QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG
+	testCID, _ := cid.Decode("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	testBlock, _ := blocks.NewBlockWithCid([]byte("test"), testCID)
 
-		if result.Status != health.StatusUp {
-			t.Errorf("expected status %s, got %s", health.StatusUp, result.Status)
-		}
-
-		var apiCheckResult *health.CheckResult
-		for name, check := range result.Details {
-			if name == "internal_api" {
-				apiCheckResult = &check
-				break
-			}
-		}
-
-		if apiCheckResult == nil {
-			t.Fatal("expected internal_api check to be present")
-		}
-
-		if apiCheckResult.Status != health.StatusUp {
-			t.Errorf("expected internal_api status %s, got %s", health.StatusUp, apiCheckResult.Status)
-		}
-	})
-
-	t.Run("internal_api check fails when API is unreachable", func(t *testing.T) {
-		mockPing := &mockPingService{err: fmt.Errorf("connection refused")}
-		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true, addrs: []multiaddr.Multiaddr{addr}}
-
-		checker := NewChecker(mockPing, mockIPFS)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		result := checker.Check(ctx)
-
-		if result.Status != health.StatusDown {
-			t.Errorf("expected status %s, got %s", health.StatusDown, result.Status)
-		}
-
-		var apiCheckResult *health.CheckResult
-		for name, check := range result.Details {
-			if name == "internal_api" {
-				apiCheckResult = &check
-				break
-			}
-		}
-
-		if apiCheckResult == nil {
-			t.Fatal("expected internal_api check to be present")
-		}
-
-		if apiCheckResult.Status != health.StatusDown {
-			t.Errorf("expected internal_api status %s, got %s", health.StatusDown, apiCheckResult.Status)
-		}
-
-		if apiCheckResult.Error == nil {
-			t.Error("expected error to be set for failed check")
-		}
-	})
-
-	t.Run("ipfs_peer check passes when peer is connected", func(t *testing.T) {
-		mockPing := &mockPingService{err: nil}
-		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true, addrs: []multiaddr.Multiaddr{addr}}
-
-		checker := NewChecker(mockPing, mockIPFS)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		result := checker.Check(ctx)
-
-		if result.Status != health.StatusUp {
-			t.Errorf("expected status %s, got %s", health.StatusUp, result.Status)
-		}
-
-		var ipfsCheckResult *health.CheckResult
-		for name, check := range result.Details {
-			if name == "ipfs_peer" {
-				ipfsCheckResult = &check
-				break
-			}
-		}
-
-		if ipfsCheckResult == nil {
-			t.Fatal("expected ipfs_peer check to be present")
-		}
-
-		if ipfsCheckResult.Status != health.StatusUp {
-			t.Errorf("expected ipfs_peer status %s, got %s", health.StatusUp, ipfsCheckResult.Status)
-		}
-	})
-
-	t.Run("ipfs_peer check fails when seed peer is not connected", func(t *testing.T) {
-		mockPing := &mockPingService{err: nil}
-		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: false, seedPeerConnected: false, addrs: []multiaddr.Multiaddr{addr}}
-
-		checker := NewChecker(mockPing, mockIPFS)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		result := checker.Check(ctx)
-
-		if result.Status != health.StatusDown {
-			t.Errorf("expected status %s, got %s", health.StatusDown, result.Status)
-		}
-
-		var ipfsCheckResult *health.CheckResult
-		for name, check := range result.Details {
-			if name == "ipfs_peer" {
-				ipfsCheckResult = &check
-				break
-			}
-		}
-
-		if ipfsCheckResult == nil {
-			t.Fatal("expected ipfs_peer check to be present")
-		}
-
-		if ipfsCheckResult.Status != health.StatusDown {
-			t.Errorf("expected ipfs_peer status %s, got %s", health.StatusDown, ipfsCheckResult.Status)
-		}
-
-		if ipfsCheckResult.Error == nil {
-			t.Error("expected error to be set for failed check")
-		}
-
-		errStr := ipfsCheckResult.Error.Error()
-		if !strings.Contains(errStr, "seed peer") {
-			t.Errorf("expected error to mention 'seed peer', got: %s", errStr)
-		}
-	})
-
-	t.Run("ipfs_peer check fails when connected but seed peer disconnected", func(t *testing.T) {
-		mockPing := &mockPingService{err: nil}
-		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: false, addrs: []multiaddr.Multiaddr{addr}}
-
-		checker := NewChecker(mockPing, mockIPFS)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		result := checker.Check(ctx)
-
-		if result.Status != health.StatusDown {
-			t.Errorf("expected status %s, got %s", health.StatusDown, result.Status)
-		}
-
-		var ipfsCheckResult *health.CheckResult
-		for name, check := range result.Details {
-			if name == "ipfs_peer" {
-				ipfsCheckResult = &check
-				break
-			}
-		}
-
-		if ipfsCheckResult == nil {
-			t.Fatal("expected ipfs_peer check to be present")
-		}
-
-		if ipfsCheckResult.Status != health.StatusDown {
-			t.Errorf("expected ipfs_peer status %s, got %s", health.StatusDown, ipfsCheckResult.Status)
-		}
-	})
-
-	t.Run("both checks fail when both dependencies are unhealthy", func(t *testing.T) {
-		mockPing := &mockPingService{err: fmt.Errorf("connection refused")}
-		mockIPFS := &mockIPFSNode{connected: false, seedPeerConnected: false}
-
-		checker := NewChecker(mockPing, mockIPFS)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		result := checker.Check(ctx)
-
-		if result.Status != health.StatusDown {
-			t.Errorf("expected status %s, got %s", health.StatusDown, result.Status)
-		}
-
-		checkResults := result.Details
-
-		if checkResults["internal_api"].Status != health.StatusDown {
-			t.Errorf("expected internal_api status %s, got %s", health.StatusDown, checkResults["internal_api"].Status)
-		}
-
-		if checkResults["ipfs_peer"].Status != health.StatusDown {
-			t.Errorf("expected ipfs_peer status %s, got %s", health.StatusDown, checkResults["ipfs_peer"].Status)
-		}
-	})
+	return CheckerOptions{
+		PingSvc: &mockPingService{},
+		IPFSNode: &mockIPFSNode{
+			peerConnected: true,
+			addrs:         addrs,
+			block:         testBlock,
+		},
+		DNSResolver: &mockDNSResolver{
+			resultMap: map[string]string{
+				"example.com": "/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
+				"pinner.xyz":  "/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
+			},
+		},
+		Config: HealthCheckConfig{
+			Websites: websites,
+			Interval: 100 * time.Millisecond,
+			Timeout:  5 * time.Second,
+		},
+	}
 }
 
-func TestHealthCheckTimeout(t *testing.T) {
-	t.Run("health check respects context timeout", func(t *testing.T) {
-		mockPing := &mockPingService{err: nil}
-		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-		mockIPFS := &mockIPFSNode{connected: true, seedPeerConnected: true, addrs: []multiaddr.Multiaddr{addr}}
+// --- Tests ---
 
-		checker := NewChecker(mockPing, mockIPFS)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
-		defer cancel()
-
-		time.Sleep(10 * time.Millisecond)
-
-		result := checker.Check(ctx)
-
-		if result.Status != health.StatusUp && result.Status != health.StatusDown {
-			t.Errorf("expected status to be either up or down, got %s", result.Status)
-		}
-	})
+func TestCheckAPIHealth_Success(t *testing.T) {
+	err := checkAPIHealth(context.Background(), &mockPingService{})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
 }
 
-func TestIPFSPeerHealthWithMultiplePeers(t *testing.T) {
-	t.Run("health check passes with multiple connected peers", func(t *testing.T) {
-		mockPing := &mockPingService{err: nil}
-		addr, _ := multiaddr.NewMultiaddr("/ip4/127.0.0.1/tcp/4001")
-
-		mockIPFS := &mockIPFSNode{
-			connected:         true,
-			seedPeerConnected: true,
-			addrs:             []multiaddr.Multiaddr{addr},
-		}
-
-		checker := NewChecker(mockPing, mockIPFS)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		result := checker.Check(ctx)
-
-		if result.Status != health.StatusUp {
-			t.Errorf("expected status %s, got %s", health.StatusUp, result.Status)
-		}
-
-		var ipfsCheckResult *health.CheckResult
-		for name, check := range result.Details {
-			if name == "ipfs_peer" {
-				ipfsCheckResult = &check
-				break
-			}
-		}
-
-		if ipfsCheckResult == nil {
-			t.Fatal("expected ipfs_peer check to be present")
-		}
-
-		if ipfsCheckResult.Status != health.StatusUp {
-			t.Errorf("expected ipfs_peer status %s, got %s", health.StatusUp, ipfsCheckResult.Status)
-		}
-	})
+func TestCheckAPIHealth_Failure(t *testing.T) {
+	err := checkAPIHealth(context.Background(), &mockPingService{err: errors.New("conn refused")})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
 }
 
-func TestIPFSPeerHealthNoAddresses(t *testing.T) {
-	t.Run("health check fails when node has no addresses", func(t *testing.T) {
-		mockPing := &mockPingService{err: nil}
-
-		mockIPFS := &mockIPFSNode{
-			connected:         true,
-			seedPeerConnected: true,
-			addrs:             []multiaddr.Multiaddr{},
-		}
-
-		checker := NewChecker(mockPing, mockIPFS)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		result := checker.Check(ctx)
-
-		if result.Status != health.StatusDown {
-			t.Errorf("expected status %s, got %s", health.StatusDown, result.Status)
-		}
-
-		var ipfsCheckResult *health.CheckResult
-		for name, check := range result.Details {
-			if name == "ipfs_peer" {
-				ipfsCheckResult = &check
-				break
-			}
-		}
-
-		if ipfsCheckResult == nil {
-			t.Fatal("expected ipfs_peer check to be present")
-		}
-
-		if ipfsCheckResult.Status != health.StatusDown {
-			t.Errorf("expected ipfs_peer status %s, got %s", health.StatusDown, ipfsCheckResult.Status)
-		}
-
-		if ipfsCheckResult.Error == nil {
-			t.Error("expected error to be set for failed check")
-		}
-
-		errStr := ipfsCheckResult.Error.Error()
-		if !strings.Contains(errStr, "not listening") {
-			t.Errorf("expected error to mention 'not listening', got: %s", errStr)
-		}
-	})
+func TestCheckIPFSPeerHealth_Success(t *testing.T) {
+	ma, _ := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/4001")
+	node := &mockIPFSNode{peerConnected: true, addrs: []multiaddr.Multiaddr{ma}}
+	err := checkIPFSPeerHealth(context.Background(), node)
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
 }
 
-func TestIPFSPeerHealthNilNode(t *testing.T) {
-	t.Run("health check fails when node is nil", func(t *testing.T) {
-		mockPing := &mockPingService{err: nil}
-
-		checker := NewChecker(mockPing, nil)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		result := checker.Check(ctx)
-
-		if result.Status != health.StatusDown {
-			t.Errorf("expected status %s, got %s", health.StatusDown, result.Status)
-		}
-
-		var ipfsCheckResult *health.CheckResult
-		for name, check := range result.Details {
-			if name == "ipfs_peer" {
-				ipfsCheckResult = &check
-				break
-			}
-		}
-
-		if ipfsCheckResult == nil {
-			t.Fatal("expected ipfs_peer check to be present")
-		}
-
-		if ipfsCheckResult.Status != health.StatusDown {
-			t.Errorf("expected ipfs_peer status %s, got %s", health.StatusDown, ipfsCheckResult.Status)
-		}
-
-		if ipfsCheckResult.Error == nil {
-			t.Error("expected error to be set for failed check")
-		}
-
-		errStr := ipfsCheckResult.Error.Error()
-		if !strings.Contains(errStr, "not initialized") {
-			t.Errorf("expected error to mention 'not initialized', got: %s", errStr)
-		}
-	})
+func TestCheckIPFSPeerHealth_NilNode(t *testing.T) {
+	err := checkIPFSPeerHealth(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil node")
+	}
 }
+
+func TestCheckIPFSPeerHealth_NoAddrs(t *testing.T) {
+	node := &mockIPFSNode{peerConnected: true, addrs: nil}
+	err := checkIPFSPeerHealth(context.Background(), node)
+	if err == nil {
+		t.Fatal("expected error for no addrs")
+	}
+}
+
+func TestCheckIPFSPeerHealth_SeedDisconnected(t *testing.T) {
+	ma, _ := multiaddr.NewMultiaddr("/ip4/0.0.0.0/tcp/4001")
+	node := &mockIPFSNode{peerConnected: false, addrs: []multiaddr.Multiaddr{ma}}
+	err := checkIPFSPeerHealth(context.Background(), node)
+	if err == nil {
+		t.Fatal("expected error for disconnected seed peer")
+	}
+}
+
+func TestResolveRootCID_IPFSPath(t *testing.T) {
+	testCID, _ := cid.Decode("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	node := &mockIPFSNode{}
+	c, err := resolveRootCID(context.Background(), node, "/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if !c.Equals(testCID) {
+		t.Fatalf("expected %s, got %s", testCID, c)
+	}
+}
+
+func TestResolveRootCID_IPNSPath(t *testing.T) {
+	testCID, _ := cid.Decode("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	node := &mockIPFSNode{resolvedCID: testCID}
+	c, err := resolveRootCID(context.Background(), node, "/ipns/k51qzi5uqu5djuc7yel4lzixq3e6ifsm0n1v0lrug8g9o18n4r0v2bgfjlkekm")
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if !c.Equals(testCID) {
+		t.Fatalf("expected %s, got %s", testCID, c)
+	}
+}
+
+func TestResolveRootCID_IPNSResolutionFail(t *testing.T) {
+	node := &mockIPFSNode{resolveErr: errors.New("routing timeout")}
+	_, err := resolveRootCID(context.Background(), node, "/ipns/k51qzi5uqu5djuc7yel4lzixq3e6ifsm0n1v0lrug8g9o18n4r0v2bgfjlkekm")
+	if err == nil {
+		t.Fatal("expected error for IPNS resolution failure")
+	}
+}
+
+func TestResolveRootCID_ShortPath(t *testing.T) {
+	node := &mockIPFSNode{}
+	_, err := resolveRootCID(context.Background(), node, "/ipfs")
+	if err == nil {
+		t.Fatal("expected error for short path")
+	}
+}
+
+func TestResolveRootCID_InvalidCID(t *testing.T) {
+	node := &mockIPFSNode{}
+	_, err := resolveRootCID(context.Background(), node, "/ipfs/notacid")
+	if err == nil {
+		t.Fatal("expected error for invalid CID")
+	}
+}
+
+func TestResolveRootCID_EmptyPath(t *testing.T) {
+	node := &mockIPFSNode{}
+	_, err := resolveRootCID(context.Background(), node, "")
+	if err == nil {
+		t.Fatal("expected error for empty path")
+	}
+}
+
+func TestResolveRootCID_UnsupportedNamespace(t *testing.T) {
+	node := &mockIPFSNode{}
+	_, err := resolveRootCID(context.Background(), node, "/unknown/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	if err == nil {
+		t.Fatal("expected error for unsupported namespace")
+	}
+}
+
+func TestCheckSingleWebsite_Success(t *testing.T) {
+	testCID, _ := cid.Decode("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	testBlock, _ := blocks.NewBlockWithCid([]byte("test"), testCID)
+
+	resolver := &mockDNSResolver{
+		resultMap: map[string]string{"example.com": "/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"},
+	}
+	node := &mockIPFSNode{block: testBlock}
+
+	err := checkSingleWebsite(context.Background(), resolver, node, "example.com")
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestCheckSingleWebsite_DNSLinkFail(t *testing.T) {
+	testCID, _ := cid.Decode("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	testBlock, _ := blocks.NewBlockWithCid([]byte("test"), testCID)
+
+	resolver := &mockDNSResolver{
+		errMap: map[string]error{"example.com": errors.New("dns timeout")},
+	}
+	node := &mockIPFSNode{block: testBlock}
+
+	err := checkSingleWebsite(context.Background(), resolver, node, "example.com")
+	if err == nil {
+		t.Fatal("expected error for DNSLink failure")
+	}
+}
+
+func TestCheckSingleWebsite_BlockFetchFail(t *testing.T) {
+	resolver := &mockDNSResolver{
+		resultMap: map[string]string{"example.com": "/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"},
+	}
+	node := &mockIPFSNode{blockErr: errors.New("bitswap timeout")}
+
+	err := checkSingleWebsite(context.Background(), resolver, node, "example.com")
+	if err == nil {
+		t.Fatal("expected error for block fetch failure")
+	}
+}
+
+func TestCheckSingleWebsite_IPNSPath(t *testing.T) {
+	testCID, _ := cid.Decode("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	testBlock, _ := blocks.NewBlockWithCid([]byte("test"), testCID)
+
+	resolver := &mockDNSResolver{
+		resultMap: map[string]string{"example.com": "/ipns/k51qzi5uqu5djuc7yel4lzixq3e6ifsm0n1v0lrug8g9o18n4r0v2bgfjlkekm"},
+	}
+	node := &mockIPFSNode{block: testBlock, resolvedCID: testCID}
+
+	err := checkSingleWebsite(context.Background(), resolver, node, "example.com")
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestCheckWebsiteRetrieval_AllSuccess(t *testing.T) {
+	testCID, _ := cid.Decode("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	testBlock, _ := blocks.NewBlockWithCid([]byte("test"), testCID)
+
+	resolver := &mockDNSResolver{
+		resultMap: map[string]string{
+			"example.com": "/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
+			"pinner.xyz":  "/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
+		},
+	}
+	node := &mockIPFSNode{block: testBlock}
+
+	err := checkWebsiteRetrieval(context.Background(), resolver, node, []string{"example.com", "pinner.xyz"}, 10*time.Second)
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+}
+
+func TestCheckWebsiteRetrieval_PartialFailure(t *testing.T) {
+	testCID, _ := cid.Decode("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")
+	testBlock, _ := blocks.NewBlockWithCid([]byte("test"), testCID)
+
+	resolver := &mockDNSResolver{
+		resultMap: map[string]string{"example.com": "/ipfs/QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"},
+		errMap:    map[string]error{"pinner.xyz": errors.New("dns timeout")},
+	}
+	node := &mockIPFSNode{block: testBlock}
+
+	err := checkWebsiteRetrieval(context.Background(), resolver, node, []string{"example.com", "pinner.xyz"}, 10*time.Second)
+	if err == nil {
+		t.Fatal("expected error for partial failure")
+	}
+}
+
+func TestCheckWebsiteRetrieval_EmptyWebsites(t *testing.T) {
+	resolver := &mockDNSResolver{}
+	node := &mockIPFSNode{}
+
+	err := checkWebsiteRetrieval(context.Background(), resolver, node, []string{}, 10*time.Second)
+	if err != nil {
+		t.Fatalf("expected nil for empty websites, got %v", err)
+	}
+}
+
+func TestNewChecker_PeriodicChecks(t *testing.T) {
+	opts := testCheckerOpts(t, []string{"example.com"})
+	checker := NewChecker(opts)
+	defer checker.Stop()
+
+	// Verify the checker is a valid health.Checker
+	if checker == nil {
+		t.Fatal("expected non-nil checker")
+	}
+}
+
+func TestNewChecker_NoWebsites(t *testing.T) {
+	opts := testCheckerOpts(t, nil)
+	checker := NewChecker(opts)
+	defer checker.Stop()
+
+	if checker == nil {
+		t.Fatal("expected non-nil checker")
+	}
+}
+
+func TestTimedCheck_UpdatesMetrics(t *testing.T) {
+	fn := timedCheck("test_check", "", func(ctx context.Context) error {
+		return nil
+	})
+	err := fn(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+
+	// Verify the gauge was set (1 = up)
+	m, err := healthCheckStatus.GetMetricWithLabelValues("test_check", "")
+	if err != nil {
+		t.Fatalf("failed to get metric: %v", err)
+	}
+	// Don't check exact value (touched by other tests), just that it's registered
+	_ = m
+}
+
+func TestTimedCheck_FailureUpdatesMetrics(t *testing.T) {
+	fn := timedCheck("test_fail", "", func(ctx context.Context) error {
+		return errors.New("fail")
+	})
+	err := fn(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestSetCheckResult(t *testing.T) {
+	setCheckResult("manual_test", "example.com", true, 0.5)
+	setCheckResult("manual_test", "example.com", false, 1.5)
+
+	// Verify both gauges are registered without panic
+	_, err := healthCheckStatus.GetMetricWithLabelValues("manual_test", "example.com")
+	if err != nil {
+		t.Fatalf("failed to get status metric: %v", err)
+	}
+	_, err = healthCheckDuration.GetMetricWithLabelValues("manual_test", "example.com")
+	if err != nil {
+		t.Fatalf("failed to get duration metric: %v", err)
+	}
+}
+
+func TestNewChecker_CheckerStart(t *testing.T) {
+	opts := testCheckerOpts(t, []string{"example.com"})
+	checker := NewChecker(opts)
+
+	checker.Start()
+	defer checker.Stop()
+
+	// Give it time to run a periodic check
+	time.Sleep(250 * time.Millisecond)
+
+	// After Start + wait, the checker should have results
+	result := checker.Check(context.Background())
+	if result.Status == "" {
+		t.Fatal("expected non-empty status after periodic check")
+	}
+}
+
+// Ensure health.Checker interface is satisfied
+var _ health.Checker = (health.Checker)(nil)

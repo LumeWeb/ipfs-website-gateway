@@ -153,7 +153,6 @@ func WithConfigPaths(paths []string) ManagerOption {
 
 // withFileSystem sets the FileSystem to the provided FileSystem implementation.
 
-
 // NewManager creates a new Manager instance with the provided options.
 func NewManager(opts ...ManagerOption) (*ManagerDefault, error) {
 	// Create config with defaults and apply options
@@ -221,14 +220,14 @@ func NewManager(opts ...ManagerOption) (*ManagerDefault, error) {
 	// 1. Default source (lowest priority)
 	// 2. File source (medium priority)
 	// 3. Env source (highest priority)
-	
+
 	// Register default config source with defaults from Config struct
 	defaultSource := source.NewDefaultConfigSource(m, source.WithDefaultSourceGlobal())
 	m.Manager.RegisterSource(defaultSource) //nolint:staticcheck // QF1008: explicit selector needed for nested resolution
 
 	// Register the file source
 	fileSource := source.NewFileSource(configFile)
-	m.Manager.RegisterSource(fileSource)      //nolint:staticcheck // QF1008: explicit selector needed for nested resolution
+	m.Manager.RegisterSource(fileSource)        //nolint:staticcheck // QF1008: explicit selector needed for nested resolution
 	m.Manager.RegisterNamespace("", fileSource) //nolint:staticcheck // QF1008: explicit selector needed for nested resolution
 
 	// Register env source (must be last to override file and defaults)
@@ -251,6 +250,7 @@ func NewManager(opts ...ManagerOption) (*ManagerDefault, error) {
 		{"rate_limit", RateLimitConfig{}},
 		{"prewarm", PrewarmConfig{}},
 		{"observability", ObservabilityConfig{}},
+		{"health_check", HealthCheckConfig{}},
 	} {
 		if err := m.Manager.RegisterStruct(s.key, s.cfg); err != nil {
 			return nil, fmt.Errorf("failed to register %s config: %w", s.key, err)
