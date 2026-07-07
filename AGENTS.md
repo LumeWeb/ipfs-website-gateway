@@ -64,7 +64,7 @@ This is a stateless edge IPFS gateway that serves DNSLink websites with strict a
 ### Active Request Pipeline (Boxo Gateway)
 1. **Client Request** → Echo HTTP Server with middleware (Recovery, Logger)
 2. **AccessControlMiddleware** → Extract domain from `Host` or `X-Forwarded-Host` header, strip port
-3. **Passthrough** → IP addresses and `/ipfs/`/`/ipns/` paths pass through without access control
+3. **Gateway Domain Check** → Gateway domain serves hello page; all other domains proceed to access control
 4. **Status Cache Check** → In-memory LRU cache with TTL (prevents DoS)
 5. **Internal API Query** → Validate website access via ipfs-sdk (cache miss)
 6. **Status Check** → 404 (not found/denied), 410 (broken/gone), or active

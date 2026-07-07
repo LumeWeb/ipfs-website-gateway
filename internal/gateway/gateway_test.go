@@ -478,11 +478,12 @@ func TestAccessControlMiddleware_IPAddressPassThrough(t *testing.T) {
 	}
 }
 
-func TestAccessControlMiddleware_IpfSPrefixURLPassThrough(t *testing.T) {
+func TestAccessControlMiddleware_GatewayDomainServesHelloPage(t *testing.T) {
 	gw, err := newTestGateway(nil, nil)
 	if err != nil {
 		t.Fatalf("newTestGateway: %v", err)
 	}
+	gw.gatewayDomain = "gateway.example.com"
 
 	called := false
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -502,8 +503,55 @@ func TestAccessControlMiddleware_IpfSPrefixURLPassThrough(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	if !called {
-		t.Error("/ipfs/ path should pass through to inner handler")
+	if called {
+		t.Error("gateway domain should serve hello page, not pass through to inner handler")
+	}
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+}
+
+func TestAccessControlMiddleware_IpfsPathOnHostedDomainGetsRewritten(t *testing.T) {
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			return &types.GatewayWebsiteResponse{
+				Domain:     "docs.pinner.xyz",
+				Status:     types.StatusActive,
+				TargetHash: "QmDocs",
+				TargetType: "ipfs",
+			}, nil
+		},
+	}
+
+	gw, err := newTestGateway(apiClient, nil)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+	gw.gatewayDomain = "ipfs.pinner.xyz"
+
+	var receivedPath string
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	})
+
+	middleware, err := NewAccessControlMiddleware(gw, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewAccessControlMiddleware: %v", err)
+	}
+	handler := middleware.Wrap(inner)
+
+	req := httptest.NewRequest(http.MethodGet, "/ipfs/quickstart", nil)
+	req.Host = "docs.pinner.xyz"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+	if receivedPath != "/ipfs/QmDocs/ipfs/quickstart" {
+		t.Errorf("expected /ipfs/QmDocs/ipfs/quickstart, got %s", receivedPath)
 	}
 }
 

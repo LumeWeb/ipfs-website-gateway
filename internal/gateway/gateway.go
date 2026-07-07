@@ -323,12 +323,6 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 			return
 		}
 
-		if strings.HasPrefix(r.URL.Path, "/ipfs/") || strings.HasPrefix(r.URL.Path, "/ipns/") {
-			m.logger.Debug("passing through ipfs/ipns path", zap.String("path", r.URL.Path))
-			next.ServeHTTP(w, r)
-			return
-		}
-
 		if gwDomain := m.gateway.GatewayDomain(); gwDomain != "" && strings.EqualFold(domain, gwDomain) {
 			m.logger.Debug("serving gateway hello page", zap.String("domain", domain))
 			m.renderHelloPage(w, domain)
