@@ -36,6 +36,11 @@ type ContentCache struct {
 	// The LRU library provides thread-safe operations, but we still use mu
 	// to coordinate with disk operations and maintain consistency
 	lru *lru.Cache[string, time.Time]
+
+	// onEvict is called for each CID evicted from the cache. Optional; if nil,
+	// no callback fires. Used by the Prewarmer to clear warmed entries so
+	// evicted sites become eligible for re-warming.
+	onEvict func(cid string)
 }
 
 // NewContentCache creates a new ContentCache with the specified cache path, max bytes, and LRU size.
@@ -89,6 +94,17 @@ func NewContentCache(cachePath string, maxBytes int64, lruSize int) (*ContentCac
 	}
 
 	return cc, nil
+}
+
+// SetOnEvict registers a callback invoked for each CID evicted from the cache.
+// The callback receives the CID string of the evicted block. This is used by
+// the Prewarmer to clear warmed entries so evicted sites become re-warmable.
+// Must be called before any Put/Evict operations. Not safe for concurrent
+// use with active cache operations.
+func (cc *ContentCache) SetOnEvict(fn func(cid string)) {
+	cc.mu.Lock()
+	defer cc.mu.Unlock()
+	cc.onEvict = fn
 }
 
 // getBlockPath returns the full path for a cached block using nginx-style directory hashing.
@@ -355,6 +371,12 @@ func (cc *ContentCache) evictLocked(bytesToFree int64) error {
 		// Update disk usage tracking
 		cc.currentBytes -= info.Size()
 		bytesFreed += info.Size()
+
+		// Notify eviction callback (if set) so consumers can clear
+		// derived state (e.g. Prewarmer.warmed entries).
+		if cc.onEvict != nil {
+			cc.onEvict(cid)
+		}
 	}
 
 	if bytesFreed < bytesToFree {
@@ -399,6 +421,12 @@ func (cc *ContentCache) evictFromDiskLocked(bytesToFree int64) error {
 		// Update disk usage tracking
 		cc.currentBytes -= info.Size()
 		bytesFreed += info.Size()
+
+		// Notify eviction callback (if set). The CID is the filename
+		// basename in both hashed and legacy flat layouts.
+		if cc.onEvict != nil {
+			cc.onEvict(filepath.Base(path))
+		}
 
 		return nil
 	})

@@ -435,3 +435,213 @@ func TestPrewarmer_ParentContextCancel_StopsWalk(t *testing.T) {
 		t.Fatal("Stop() hung — parent context cancellation should stop walk")
 	}
 }
+
+func TestPrewarmer_IsWarmed_FalseBeforeSubmit(t *testing.T) {
+	bs := newTestBlockService(t)
+	p := newTestPrewarmer(t, bs)
+	defer p.Stop()
+
+	blk := makeRawBlock(t, []byte("hello"))
+	c := blk.Cid()
+
+	if p.IsWarmed(c) {
+		t.Fatal("expected IsWarmed=false before any submit")
+	}
+}
+
+func TestPrewarmer_IsWarmed_TrueAfterWalk(t *testing.T) {
+	ctx := context.Background()
+	bs := newTestBlockService(t)
+	p := newTestPrewarmer(t, bs)
+	defer p.Stop()
+
+	blk := makeRawBlock(t, []byte("hello world"))
+	if err := bs.Blockstore().Put(ctx, blk); err != nil {
+		t.Fatal(err)
+	}
+
+	p.Submit(blk.Cid())
+	p.Stop()
+
+	if !p.IsWarmed(blk.Cid()) {
+		t.Fatal("expected IsWarmed=true after successful walk")
+	}
+}
+
+func TestPrewarmer_IsWarmed_FalseAfterFailedWalk(t *testing.T) {
+	bs := newTestBlockService(t)
+	p := newTestPrewarmer(t, bs)
+	defer p.Stop()
+
+	// CID that doesn't exist in the blockstore; walk will fail
+	c := makeRawCID([]byte("nonexistent"))
+
+	p.Submit(c)
+	p.Stop()
+
+	if p.IsWarmed(c) {
+		t.Fatal("expected IsWarmed=false after failed walk")
+	}
+}
+
+func TestPrewarmer_SubmitPath_EmptyPathFallsBackToFullWalk(t *testing.T) {
+	ctx := context.Background()
+	bs := newTestBlockService(t)
+	p := newTestPrewarmer(t, bs)
+	defer p.Stop()
+
+	blk := makeRawBlock(t, []byte("hello"))
+	if err := bs.Blockstore().Put(ctx, blk); err != nil {
+		t.Fatal(err)
+	}
+
+	p.SubmitPath(blk.Cid(), "")
+	p.Stop()
+
+	if !p.IsWarmed(blk.Cid()) {
+		t.Fatal("expected IsWarmed=true after SubmitPath with empty path")
+	}
+}
+
+func TestPrewarmer_SubmitPath_DeduplicatesActiveWalk(t *testing.T) {
+	ctx := context.Background()
+	bs := newTestBlockService(t)
+	p := newTestPrewarmer(t, bs)
+	defer p.Stop()
+
+	blk := makeRawBlock(t, []byte("hello"))
+	if err := bs.Blockstore().Put(ctx, blk); err != nil {
+		t.Fatal(err)
+	}
+
+	// Submit then SubmitPath: second should be deduped by active map
+	p.Submit(blk.Cid())
+	p.SubmitPath(blk.Cid(), "some/path")
+	p.Stop()
+
+	if !p.IsWarmed(blk.Cid()) {
+		t.Fatal("expected IsWarmed=true after concurrent submit + submitpath")
+	}
+}
+
+func TestPrewarmer_SubmitPath_BadPathStillTriggersFullWalk(t *testing.T) {
+	ctx := context.Background()
+	bs := newTestBlockService(t)
+	p := newTestPrewarmer(t, bs)
+	defer p.Stop()
+
+	blk := makeRawBlock(t, []byte("hello"))
+	if err := bs.Blockstore().Put(ctx, blk); err != nil {
+		t.Fatal(err)
+	}
+
+	p.SubmitPath(blk.Cid(), "nonexistent/path")
+	p.Stop()
+
+	// Root block should still be cached (full walk happens after path resolve fails)
+	has, err := bs.Blockstore().Has(ctx, blk.Cid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has {
+		t.Fatal("expected root block to be in blockstore even when path resolution fails")
+	}
+
+	if !p.IsWarmed(blk.Cid()) {
+		t.Fatal("expected IsWarmed=true: full walk should succeed even if path resolve fails")
+	}
+}
+
+func TestPrewarmer_SubmitPath_SkipsAlreadyWarmed(t *testing.T) {
+	ctx := context.Background()
+	bs := newTestBlockService(t)
+	p := newTestPrewarmer(t, bs)
+	defer p.Stop()
+
+	blk := makeRawBlock(t, []byte("hello"))
+	if err := bs.Blockstore().Put(ctx, blk); err != nil {
+		t.Fatal(err)
+	}
+
+	// First walk marks it as warmed
+	p.Submit(blk.Cid())
+	p.Stop()
+
+	if !p.IsWarmed(blk.Cid()) {
+		t.Fatal("expected IsWarmed=true after first walk")
+	}
+
+	// SubmitPath should skip since already warmed
+	p.SubmitPath(blk.Cid(), "some/path")
+	p.Stop()
+}
+
+func TestPrewarmer_ConcurrentSubmitPath_DeduplicatesWalks(t *testing.T) {
+	ctx := context.Background()
+	bs := newTestBlockService(t)
+	p := newTestPrewarmer(t, bs)
+	defer p.Stop()
+
+	file := makeRawBlock(t, []byte("content"))
+	if err := bs.Blockstore().Put(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	dir := makeDirNode(t,
+		&format.Link{Cid: file.Cid(), Name: "index.html", Size: uint64(len(file.RawData()))},
+	)
+	putProtoNode(t, ctx, bs.Blockstore(), dir)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.SubmitPath(dir.Cid(), "index.html")
+		}()
+	}
+	wg.Wait()
+	p.Stop()
+
+	if !p.IsWarmed(dir.Cid()) {
+		t.Fatal("expected IsWarmed=true after concurrent SubmitPath")
+	}
+}
+
+func TestPrewarmer_ClearWarmed_AllowsRewarm(t *testing.T) {
+	ctx := context.Background()
+	bs := newTestBlockService(t)
+	p := newTestPrewarmer(t, bs)
+	defer p.Stop()
+
+	blk := makeRawBlock(t, []byte("eviction regression"))
+	if err := bs.Blockstore().Put(ctx, blk); err != nil {
+		t.Fatal(err)
+	}
+
+	// Walk the DAG so it becomes warmed.
+	p.Submit(blk.Cid())
+	p.Stop()
+
+	if !p.IsWarmed(blk.Cid()) {
+		t.Fatal("expected IsWarmed=true after first walk")
+	}
+
+	// Simulate block cache eviction: clear the warmed entry.
+	p.ClearWarmed(blk.Cid().String())
+
+	if p.IsWarmed(blk.Cid()) {
+		t.Fatal("expected IsWarmed=false after ClearWarmed")
+	}
+
+	// Re-submitting should walk again and re-mark as warmed.
+	// Need a fresh prewarmer since the old one was stopped.
+	p2 := newTestPrewarmer(t, bs)
+	defer p2.Stop()
+
+	p2.Submit(blk.Cid())
+	p2.Stop()
+
+	if !p2.IsWarmed(blk.Cid()) {
+		t.Fatal("expected IsWarmed=true after re-walk following eviction")
+	}
+}

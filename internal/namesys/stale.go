@@ -180,6 +180,9 @@ func (s *StaleWhileRevalidateNameSystem) Resolve(ctx context.Context, p path.Pat
 		if outcome.err == nil {
 			s.store.PutStale(key, staleEntry{result: stripSubPath(outcome.result), cachedAt: time.Now()})
 			s.startWatcher(key)
+			if s.prewarmFn != nil {
+				s.prewarmFn(key, stripSubPath(outcome.result).Path)
+			}
 			s.logger.Debug("resolve succeeded",
 				zap.String("key", key),
 				zap.Duration("elapsed", elapsed),

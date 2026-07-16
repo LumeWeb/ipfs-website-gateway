@@ -1224,3 +1224,54 @@ func TestPrewarmCallback_Revalidate_FiresOnChangedPath(t *testing.T) {
 		t.Errorf("expected callback path %s, got %s", newResolvedPath.String(), callbackPath.String())
 	}
 }
+
+func TestResolve_CacheMiss_FiresPrewarmCallback(t *testing.T) {
+	key := "/ipns/12D3KooWabc"
+	resolvedPath := newPath(t, "/ipfs/bafybeihqjmf3b7z2zkencefihq5bk4g2ia2x2l222f6imoxsnfp7serrsu")
+
+	store := newTestStore(t)
+
+	var callbackKey string
+	var callbackPath path.Path
+	callbackFired := make(chan struct{}, 1)
+
+	mock := &mockNameSystem{
+		resolveFn: func(ctx context.Context, req path.Path, opts ...namesys.ResolveOption) (namesys.Result, error) {
+			return namesys.Result{Path: resolvedPath, TTL: time.Minute}, nil
+		},
+	}
+
+	sut := NewStaleWhileRevalidateNameSystem(mock, store, 2, zap.NewNop())
+	sut.SetPrewarmCallback(func(k string, p path.Path) {
+		callbackKey = k
+		callbackPath = p
+		select {
+		case callbackFired <- struct{}{}:
+		default:
+		}
+	})
+
+	// First resolve: cache miss, should trigger prewarmFn
+	p := newPath(t, key)
+	result, err := sut.Resolve(context.Background(), p)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if result.Path.String() != resolvedPath.String() {
+		t.Errorf("expected resolved path %s, got %s", resolvedPath.String(), result.Path.String())
+	}
+
+	select {
+	case <-callbackFired:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for prewarm callback on cache miss")
+	}
+	sut.Stop()
+
+	if callbackKey != key {
+		t.Errorf("expected callback key %q, got %q", key, callbackKey)
+	}
+	if callbackPath.String() != resolvedPath.String() {
+		t.Errorf("expected callback path %s, got %s", resolvedPath.String(), callbackPath.String())
+	}
+}
