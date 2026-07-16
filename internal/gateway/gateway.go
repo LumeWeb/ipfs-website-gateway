@@ -17,6 +17,7 @@ import (
 	"github.com/ipfs/boxo/gateway"
 	"github.com/ipfs/boxo/namesys"
 	"github.com/ipfs/boxo/path"
+	cid "github.com/ipfs/go-cid"
 	"github.com/libp2p/go-libp2p/core/routing"
 	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
@@ -25,6 +26,7 @@ import (
 	"go.lumeweb.com/ipfs-website-gateway/internal/metrics"
 	stalenamesys "go.lumeweb.com/ipfs-website-gateway/internal/namesys"
 	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
+	"go.lumeweb.com/ipfs-website-gateway/internal/prewarm"
 	"go.opentelemetry.io/otel/attribute"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
@@ -58,6 +60,7 @@ type Gateway struct {
 	api           api.APIClient
 	statusCache   *cache.StatusCache
 	nameSys       *stalenamesys.StaleWhileRevalidateNameSystem
+	prewarmer     *prewarm.Prewarmer
 	gatewayDomain string
 }
 
@@ -145,6 +148,14 @@ func (g *Gateway) Close() {
 
 func (g *Gateway) SetPrewarmCallback(fn stalenamesys.PrewarmCallback) {
 	g.nameSys.SetPrewarmCallback(fn)
+}
+
+func (g *Gateway) SetPrewarmer(p *prewarm.Prewarmer) {
+	g.prewarmer = p
+}
+
+func (g *Gateway) Prewarmer() *prewarm.Prewarmer {
+	return g.prewarmer
 }
 
 func (g *Gateway) Handler() http.Handler {
@@ -426,6 +437,17 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 				"The target type is not recognized. Please contact support.")
 			return
 		}
+
+		// Trigger prewarm for the requested path. For IPFS, TargetHash
+		// is the root CID. For IPNS, prewarm is handled by the namesys
+		// callback on resolve/revalidate. SubmitPath is deduped by the
+		// Prewarmer's active map and warmed set.
+		if m.gateway.prewarmer != nil {
+			if rootCID, err := cid.Decode(website.TargetHash); err == nil {
+				m.gateway.prewarmer.SubmitPath(rootCID, strings.TrimPrefix(originalPath, "/"))
+			}
+		}
+
 		ctx = context.WithValue(ctx, gateway.DNSLinkHostnameKey, domain)
 		r = r.WithContext(ctx)
 

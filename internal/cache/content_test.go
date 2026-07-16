@@ -1415,3 +1415,53 @@ func setupCache(t *testing.T) *ContentCache {
 
 	return cache
 }
+
+func TestContentCache_OnEvict_FiresOnEviction(t *testing.T) {
+	tmpDir := t.TempDir()
+	maxBytes := int64(1024)
+
+	cache, err := NewContentCache(tmpDir, maxBytes, 100000)
+	if err != nil {
+		t.Fatalf("NewContentCache returned error: %v", err)
+	}
+
+	var evicted []string
+	cache.SetOnEvict(func(cid string) {
+		evicted = append(evicted, cid)
+	})
+
+	// Add two blocks (800 bytes), then a third that triggers auto-eviction.
+	for _, b := range []struct{ cid string; data []byte }{
+		{"QmEvict1", make([]byte, 400)},
+		{"QmEvict2", make([]byte, 400)},
+		{"QmEvict3", make([]byte, 400)},
+	} {
+		if err := cache.Put(b.cid, b.data); err != nil {
+			t.Fatalf("Put(%s) error: %v", b.cid, err)
+		}
+	}
+
+	// QmEvict1 should have been auto-evicted when QmEvict3 was added.
+	if len(evicted) == 0 {
+		t.Fatal("expected at least one eviction callback, got none")
+	}
+
+	found := false
+	for _, c := range evicted {
+		if c == "QmEvict1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected QmEvict1 in eviction callbacks, got %v", evicted)
+	}
+
+	// Explicit Evict should also fire the callback.
+	evicted = evicted[:0]
+	if err := cache.Evict(400); err != nil {
+		t.Fatalf("Evict error: %v", err)
+	}
+	if len(evicted) == 0 {
+		t.Error("expected eviction callback on explicit Evict, got none")
+	}
+}

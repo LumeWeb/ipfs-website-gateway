@@ -6,19 +6,21 @@ import (
 )
 
 const (
-	MetricPrewarmSubmittedTotal = "submitted_total"
-	MetricPrewarmCompletedTotal = "completed_total"
-	MetricPrewarmFailedTotal    = "failed_total"
-	MetricPrewarmBlocksFetched  = "blocks_fetched_total"
-	MetricPrewarmActiveWalks    = "active_walks"
+	MetricPrewarmSubmittedTotal      = "submitted_total"
+	MetricPrewarmCompletedTotal      = "completed_total"
+	MetricPrewarmFailedTotal         = "failed_total"
+	MetricPrewarmBlocksFetched       = "blocks_fetched_total"
+	MetricPrewarmActiveWalks         = "active_walks"
+	MetricPrewarmPathSubmittedTotal  = "path_submitted_total"
 )
 
 var (
-	prewarmSubmittedTotal prometheus.Counter
-	prewarmCompletedTotal prometheus.Counter
-	prewarmFailedTotal    prometheus.Counter
-	prewarmBlocksFetched  prometheus.Counter
-	prewarmActiveWalks    prometheus.Gauge
+	prewarmSubmittedTotal     prometheus.Counter
+	prewarmCompletedTotal     prometheus.Counter
+	prewarmFailedTotal        prometheus.Counter
+	prewarmBlocksFetched      prometheus.Counter
+	prewarmActiveWalks        prometheus.Gauge
+	prewarmPathSubmittedTotal prometheus.Counter
 )
 
 func init() {
@@ -56,4 +58,11 @@ func init() {
 		Help:      "Number of currently active DAG walks",
 	})
 	metrics.MustRegister(prewarmActiveWalks)
+
+	prewarmPathSubmittedTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Subsystem: "prewarm",
+		Name:      MetricPrewarmPathSubmittedTotal,
+		Help:      "Total number of path-targeted prewarm submissions",
+	})
+	metrics.MustRegister(prewarmPathSubmittedTotal)
 }

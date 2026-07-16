@@ -236,6 +236,8 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 			}
 			prewarmer.Submit(rootCID)
 		})
+		gateway.SetPrewarmer(prewarmer)
+		contentCache.SetOnEvict(prewarmer.ClearWarmed)
 		logger.Info("Cache pre-warming enabled",
 			zap.Int("max_concurrency", cfg.Prewarm.MaxConc),
 		)
