@@ -219,7 +219,16 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	logger.Info("Gateway handler initialized")
 
 	if cfg.Prewarm.Enabled {
-		prewarmer, err = prewarm.NewPrewarmer(ctx, node.BlockService, logger, cfg.IPFS.RetrievalTimeout, cfg.Prewarm.MaxConc, cfg.Prewarm.RetryAttempts, cfg.Prewarm.RetryDelay)
+		var dagResolver prewarm.DAGResolver
+		if cfg.API.URL != "" {
+			dagResolver, err = prewarm.NewDAGResolverFromConfig(cfg.API.URL, cfg.API.Secret, cfg.API.Timeout)
+			if err != nil {
+				logger.Warn("failed to initialize DAG resolver, falling back to sequential walks only", zap.Error(err))
+			} else {
+				logger.Info("DAG resolver initialized for batch prewarming")
+			}
+		}
+		prewarmer, err = prewarm.NewPrewarmer(ctx, node.BlockService, dagResolver, logger, cfg.IPFS.RetrievalTimeout, cfg.Prewarm.MaxConc, cfg.Prewarm.RetryAttempts, cfg.Prewarm.RetryDelay, cfg.Prewarm.DAGBatchConc)
 		if err != nil {
 			logger.Error("failed to initialize prewarmer", zap.Error(err))
 			return fmt.Errorf("failed to initialize prewarmer: %w", err)

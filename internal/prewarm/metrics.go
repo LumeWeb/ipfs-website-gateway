@@ -12,6 +12,8 @@ const (
 	MetricPrewarmBlocksFetched       = "blocks_fetched_total"
 	MetricPrewarmActiveWalks         = "active_walks"
 	MetricPrewarmPathSubmittedTotal  = "path_submitted_total"
+	MetricPrewarmDAGBatchUsed        = "dag_batch_used_total"
+	MetricPrewarmDAGBatchFallback     = "dag_batch_fallback_total"
 )
 
 var (
@@ -21,6 +23,8 @@ var (
 	prewarmBlocksFetched      prometheus.Counter
 	prewarmActiveWalks        prometheus.Gauge
 	prewarmPathSubmittedTotal prometheus.Counter
+	prewarmDAGBatchUsed       prometheus.Counter
+	prewarmDAGBatchFallback   prometheus.Counter
 )
 
 func init() {
@@ -65,4 +69,18 @@ func init() {
 		Help:      "Total number of path-targeted prewarm submissions",
 	})
 	metrics.MustRegister(prewarmPathSubmittedTotal)
+
+	prewarmDAGBatchUsed = prometheus.NewCounter(prometheus.CounterOpts{
+		Subsystem: "prewarm",
+		Name:      MetricPrewarmDAGBatchUsed,
+		Help:      "Total number of prewarms that used the DAG-bypass batch path",
+	})
+	metrics.MustRegister(prewarmDAGBatchUsed)
+
+	prewarmDAGBatchFallback = prometheus.NewCounter(prometheus.CounterOpts{
+		Subsystem: "prewarm",
+		Name:      MetricPrewarmDAGBatchFallback,
+		Help:      "Total number of prewarms that fell back to sequential walk after DAG-bypass failed",
+	})
+	metrics.MustRegister(prewarmDAGBatchFallback)
 }
