@@ -155,6 +155,7 @@ type PrewarmConfig struct {
 	MaxConc       int           `config:"max_concurrency"`
 	RetryAttempts uint          `config:"retry_attempts"`
 	RetryDelay    time.Duration `config:"retry_delay"`
+	DAGBatchConc  int           `config:"dag_batch_concurrency"`
 }
 
 // LoggingConfig holds logging configuration settings.
@@ -252,6 +253,7 @@ func (c PrewarmConfig) Defaults() map[string]any {
 		"MaxConc":       2,
 		"RetryAttempts": uint(2),
 		"RetryDelay":    1 * time.Second,
+		"DAGBatchConc":  10,
 	}
 }
 
@@ -282,6 +284,7 @@ func (c PrewarmConfig) Schema() zog.ZogSchema {
 		"MaxConc":       zog.Int().GT(0).Optional(),
 		"RetryAttempts": zog.Uint().GT(0).Optional(),
 		"RetryDelay":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"DAGBatchConc":  zog.Int().GT(0).Optional(),
 	})
 }
 
