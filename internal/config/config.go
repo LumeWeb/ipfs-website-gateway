@@ -64,6 +64,36 @@ type APIConfig struct {
 	URL     string        `config:"url"`
 	Secret  string        `config:"secret"`
 	Timeout time.Duration `config:"timeout"`
+	SSE     SSEConfig     `config:"sse"`
+}
+
+// SSEConfig holds configuration for the portal SSE event client.
+type SSEConfig struct {
+	Enabled    bool          `config:"enabled"`
+	Reconnect  bool          `config:"reconnect"`
+	Backoff    time.Duration `config:"backoff"`
+	MaxBackoff time.Duration `config:"max_backoff"`
+	MaxRetries int           `config:"max_retries"`
+}
+
+func (c SSEConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Enabled":    true,
+		"Reconnect":  true,
+		"Backoff":    1 * time.Second,
+		"MaxBackoff": 30 * time.Second,
+		"MaxRetries": 0, // 0 = unlimited
+	}
+}
+
+func (c SSEConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Enabled":    zog.Bool().Optional(),
+		"Reconnect":  zog.Bool().Optional(),
+		"Backoff":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"MaxBackoff": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"MaxRetries": zog.Int().Optional(),
+	})
 }
 
 // IPFSConfig holds IPFS network configuration settings.
@@ -161,17 +191,19 @@ func (c ServerConfig) Schema() zog.ZogSchema {
 func (c APIConfig) Defaults() map[string]any {
 	return map[string]any{
 		"Timeout": 30 * time.Second,
+		"SSE":     c.SSE.Defaults(),
 	}
 }
 
 // Schema implements the ConfigSchemaProvider interface for Zog validation.
 func (c APIConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
-		"URL":    zog.String().Optional(),
-		"Secret": zog.String().Optional(),
+		"URL":     zog.String().Optional(),
+		"Secret":  zog.String().Optional(),
 		"Timeout": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
 			return *valPtr > 0
 		}, zog.Message("timeout must be greater than 0")),
+		"SSE": c.SSE.Schema(),
 	})
 }
 

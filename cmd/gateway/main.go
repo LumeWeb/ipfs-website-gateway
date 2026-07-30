@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/urfave/cli/v3"
@@ -20,6 +21,7 @@ import (
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
 	"go.lumeweb.com/ipfs-website-gateway/internal/dns"
+	"go.lumeweb.com/ipfs-website-gateway/internal/event"
 	gw "go.lumeweb.com/ipfs-website-gateway/internal/gateway"
 	"go.lumeweb.com/ipfs-website-gateway/internal/health"
 	"go.lumeweb.com/ipfs-website-gateway/internal/ipfs"
@@ -30,11 +32,12 @@ import (
 )
 
 var (
-	cfg       *config.Config
-	logger    *zap.Logger
-	node      *ipfs.Node
-	srv       *server.Server
-	prewarmer *prewarm.Prewarmer
+	cfg        *config.Config
+	logger     *zap.Logger
+	node       *ipfs.Node
+	srv        *server.Server
+	prewarmer  *prewarm.Prewarmer
+	sseClient  *event.PortalEventClient
 )
 
 type DNSValidatorAdapter struct{}
@@ -243,6 +246,55 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		)
 	}
 
+	// SSE event client for proactive cache invalidation
+	if cfg.API.SSE.Enabled && cfg.API.URL != "" {
+		sseURL := strings.TrimSuffix(cfg.API.URL, "/") + "/internal/websites/events"
+		sseClient = event.NewPortalEventClient(
+			sseURL,
+			cfg.API.Secret,
+			event.ReconnectConfig{
+				Reconnect:  cfg.API.SSE.Reconnect,
+				Backoff:    cfg.API.SSE.Backoff,
+				MaxBackoff: cfg.API.SSE.MaxBackoff,
+				MaxRetries: cfg.API.SSE.MaxRetries,
+			},
+			func(ev event.WebsiteEvent) {
+				switch ev.Type {
+				case event.EventTypePublished:
+					if ev.Published != nil {
+						logger.Info("SSE: site published, invalidating cache + prewarming",
+							zap.String("domain", ev.Published.Domain),
+							zap.String("cid", ev.Published.CID),
+						)
+						statusCache.Invalidate(ev.Published.Domain)
+						if prewarmer != nil {
+							rootCID, err := cid.Decode(ev.Published.CID)
+							if err != nil {
+								logger.Error("SSE: invalid CID in published event",
+									zap.String("cid", ev.Published.CID),
+									zap.Error(err))
+								return
+							}
+							prewarmer.Submit(rootCID)
+						}
+					}
+				case event.EventTypeRemoved:
+					if ev.Removed != nil {
+						logger.Info("SSE: site removed, invalidating cache",
+							zap.String("domain", ev.Removed.Domain),
+						)
+						statusCache.Invalidate(ev.Removed.Domain)
+					}
+				}
+			},
+			logger,
+		)
+		sseClient.Start()
+		logger.Info("SSE event client started",
+			zap.String("url", sseURL),
+		)
+	}
+
 	healthChecker := health.NewChecker(health.CheckerOptions{
 		PingSvc:     apiClient,
 		IPFSNode:    node,
@@ -279,6 +331,10 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 	if err := srv.Start(ctx, addr); err != nil && err != http.ErrServerClosed {
 		logger.Error("server failed", zap.Error(err))
 		return fmt.Errorf("server failed: %w", err)
+	}
+
+	if sseClient != nil {
+		sseClient.Stop()
 	}
 
 	if prewarmer != nil {

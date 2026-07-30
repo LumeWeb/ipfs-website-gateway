@@ -30,6 +30,25 @@ api:
   
   # Timeout for API requests (default: 30s)
   timeout: 30s
+  
+  # SSE event streaming for proactive cache invalidation
+  # When enabled, the gateway receives real-time website lifecycle events
+  # (published, removed) from the portal, complementing the polling mechanism.
+  sse:
+    # Enable SSE event client (default: true)
+    enabled: true
+    
+    # Enable automatic reconnection on disconnect (default: true)
+    reconnect: true
+    
+    # Initial backoff for reconnection attempts (default: 1s)
+    backoff: 1s
+    
+    # Maximum backoff cap (default: 30s)
+    max_backoff: 30s
+    
+    # Maximum reconnection attempts, 0 = unlimited (default: 0)
+    max_retries: 0
 
 # IPFS configuration
 ipfs:
