@@ -86,6 +86,16 @@ func (sc *StatusCache) SetAPIClient(client api.APIClient) {
 	sc.api = client
 }
 
+// Invalidate removes a domain from the cache (both LRU and Redis),
+// forcing the next request to revalidate from the API. Called by SSE
+// event handlers when a website is published or removed.
+func (sc *StatusCache) Invalidate(domain string) {
+	sc.cache.Remove(domain)
+	if sc.redis != nil {
+		_ = sc.redis.Delete(context.Background(), domain)
+	}
+}
+
 func (sc *StatusCache) Get(domain string) *types.CacheResult {
 	entry, ok := sc.cache.Get(domain)
 	if !ok {
