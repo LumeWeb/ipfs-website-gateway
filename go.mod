@@ -18,6 +18,9 @@ require (
 	github.com/ipfs/go-ipld-format v0.6.3
 	github.com/ipfs/go-log/v2 v2.9.1
 	github.com/ipfs/go-metrics-interface v0.3.0
+	github.com/ipfs/go-unixfsnode v1.10.3
+	github.com/ipld/go-codec-dagpb v1.7.0
+	github.com/ipld/go-ipld-prime v0.22.0
 	github.com/labstack/echo-contrib/v5 v5.0.1
 	github.com/labstack/echo-opentelemetry v0.0.2
 	github.com/labstack/echo/v5 v5.1.1
@@ -34,7 +37,7 @@ require (
 	github.com/tj/go-headers v0.0.0-20210318114139-bca4b5702463
 	github.com/urfave/cli/v3 v3.0.0-alpha9
 	go.lumeweb.com/configmanager v0.3.24
-	go.lumeweb.com/ipfs-sdk v0.1.52
+	go.lumeweb.com/ipfs-sdk v0.1.56
 	go.opentelemetry.io/contrib/bridges/otelzap v0.19.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.20.0
@@ -96,10 +99,7 @@ require (
 	github.com/ipfs/go-ipld-cbor v0.2.1 // indirect
 	github.com/ipfs/go-ipld-legacy v0.2.2 // indirect
 	github.com/ipfs/go-peertaskqueue v0.8.3 // indirect
-	github.com/ipfs/go-unixfsnode v1.10.3 // indirect
 	github.com/ipld/go-car/v2 v2.16.0 // indirect
-	github.com/ipld/go-codec-dagpb v1.7.0 // indirect
-	github.com/ipld/go-ipld-prime v0.22.0 // indirect
 	github.com/jackpal/go-nat-pmp v1.0.2 // indirect
 	github.com/jbenet/go-temp-err-catcher v0.1.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
