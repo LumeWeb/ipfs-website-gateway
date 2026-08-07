@@ -25,4 +25,6 @@ Thumbs.db
 /data/
 /cache/
 .aider*
+
+# Hermes planning artifacts
 .hermes/

@@ -127,6 +127,19 @@ func (s *Server) setupRoutes(e *echo.Echo) {
 		s.logger.Info("Metrics endpoint enabled", zap.String("path", metricsPath))
 	}
 
+	if s.config.Observability.IsPprofEnabled() {
+		pprofPath := s.config.Observability.Pprof.Path
+		if pprofPath == "" {
+			pprofPath = "/debug/pprof"
+		}
+
+		if err := s.registerPprofRoutes(e, pprofPath); err != nil {
+			// pprof is an optional debugging feature; a bad path config
+			// degrades to disabled rather than aborting the whole process.
+			s.logger.Warn("pprof disabled: failed to register routes", zap.Error(err))
+		}
+	}
+
 	if s.config.RateLimit.Enabled {
 		store := echoMiddleware.NewRateLimiterMemoryStoreWithConfig(
 			echoMiddleware.RateLimiterMemoryStoreConfig{
