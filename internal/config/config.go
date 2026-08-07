@@ -374,6 +374,13 @@ type ObservabilityConfig struct {
 	Tracing     TracingConfig     `config:"tracing"`
 	Logging     OTelLoggingConfig `config:"logging"`
 	Metrics     MetricsConfig     `config:"metrics"`
+	Pprof       PprofConfig       `config:"pprof"`
+}
+
+// PprofConfig holds configuration for the Go pprof debugging endpoints.
+type PprofConfig struct {
+	Enabled bool   `config:"enabled"`
+	Path    string `config:"path"`
 }
 
 type TracingConfig struct {
@@ -404,6 +411,7 @@ func (o ObservabilityConfig) Schema() zog.ZogSchema {
 		"Enabled":     zog.Bool().Optional(),
 		"ServiceName": zog.String().Optional(),
 		"OTLP":        o.OTLP.Schema(),
+		"Pprof":       o.Pprof.Schema(),
 	}).TestFunc(func(data any, ctx zog.Ctx) bool {
 		c, ok := data.(*ObservabilityConfig)
 		if !ok {
@@ -423,6 +431,22 @@ func (o ObservabilityConfig) IsTracingEnabled() bool { return o.Enabled && o.Tra
 func (o ObservabilityConfig) IsLoggingEnabled() bool { return o.Enabled && o.Logging.Enabled }
 func (o ObservabilityConfig) IsMetricsEnabled() bool { return o.Enabled && o.Metrics.Enabled }
 func (m MetricsConfig) IsBasicAuthEnabled() bool     { return m.BasicAuthPassword != "" }
+
+func (o ObservabilityConfig) IsPprofEnabled() bool { return o.Pprof.Enabled }
+
+func (p PprofConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Enabled": false,
+		"Path":    "/debug/pprof",
+	}
+}
+
+func (p PprofConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Enabled": zog.Bool().Optional(),
+		"Path":    zog.String().Min(1).Optional(),
+	})
+}
 
 func (t TracingConfig) Defaults() map[string]any {
 	return map[string]any{
