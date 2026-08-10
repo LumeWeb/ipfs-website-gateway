@@ -3,7 +3,12 @@ package api
 import (
 	"context"
 	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
@@ -166,4 +171,73 @@ func TestSDKClient_TypePassthrough(t *testing.T) {
 	if resp.TargetType != "ipns" {
 		t.Errorf("expected target type ipns, got %s", resp.TargetType)
 	}
+}
+
+// TestNewClient_PingUsesFreshConnections guards the health-check hardening:
+// the ping path must not reuse stale keep-alive connections (a pooled TLS
+// connection to the edge can silently die and hang /healthz until its
+// timeout). Each Ping must establish a fresh connection, matching a direct
+// curl to /internal/ping.
+//
+// We count TCP connections accepted by the test server rather than handler
+// invocations: each Ping always sends its own HTTP request regardless of
+// connection reuse, so handler counts would still read 3 even if keep-alive
+// connections were fully reused. One Accept per established TCP connection.
+func TestNewClient_PingUsesFreshConnections(t *testing.T) {
+	var accepts atomic.Int64
+
+	// connCountingListener wraps the httptest listener so we see every
+	// accepted TCP connection (one Accept per established connection).
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen() error = %v", err)
+	}
+	l := &connCountingListener{Listener: inner, accepts: &accepts}
+	defer l.Close()
+
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/ping" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	ts.Listener = l
+	ts.Start()
+	defer ts.Close()
+
+	client, err := NewClient(ts.URL, "test-secret", 5*time.Second)
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	checks := 3
+	first := accepts.Load()
+	for i := 0; i < checks; i++ {
+		if _, err := client.Ping(context.Background()); err != nil {
+			t.Fatalf("Ping() attempt %d error = %v", i+1, err)
+		}
+	}
+
+	got := accepts.Load() - first
+	if got != int64(checks) {
+		t.Errorf("expected %d freshly accepted TCP connections (one per ping), got %d (connections are being reused)", checks, got)
+	}
+}
+
+// connCountingListener wraps a net.Listener and increments a counter for
+// every accepted connection, so tests can distinguish connection reuse from
+// request counting.
+type connCountingListener struct {
+	net.Listener
+	accepts *atomic.Int64
+}
+
+func (l *connCountingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err == nil {
+		l.accepts.Add(1)
+	}
+	return conn, err
 }
