@@ -85,6 +85,37 @@ func (m *mockWebsitesService) GetConfig(ctx context.Context) (*ipfs.WebsiteConfi
 	return nil, nil
 }
 
+// The remaining methods satisfy the ipfs.WebsitesService interface added in
+// ipfs-sdk v0.1.76 (domain binding). This mock is only used to test the
+// gateway API client's GetWebsite path, so these return zero values.
+func (m *mockWebsitesService) ListDomains(ctx context.Context, websiteID string) ([]ipfs.DomainResponse, error) {
+	return nil, nil
+}
+
+func (m *mockWebsitesService) BindDomain(ctx context.Context, websiteID string, req ipfs.DomainRequest) (*ipfs.DomainResponse, error) {
+	return nil, nil
+}
+
+func (m *mockWebsitesService) UpdateDomain(ctx context.Context, websiteID string, domainID string, req ipfs.DomainUpdateRequest) (*ipfs.DomainResponse, error) {
+	return nil, nil
+}
+
+func (m *mockWebsitesService) UnbindDomain(ctx context.Context, websiteID string, domainID string) error {
+	return nil
+}
+
+func (m *mockWebsitesService) VerifyDomain(ctx context.Context, websiteID string, domainID string) (*ipfs.DomainResponse, error) {
+	return nil, nil
+}
+
+func (m *mockWebsitesService) GetDomainDNSRequirements(ctx context.Context, websiteID string, domainID string) (*ipfs.DomainResponse, error) {
+	return nil, nil
+}
+
+func (m *mockWebsitesService) RepublishDANE(ctx context.Context, websiteID string, domainID string) (*ipfs.DomainDANERepublishResponse, error) {
+	return nil, nil
+}
+
 func TestSDKClient_GetWebsite_Success(t *testing.T) {
 	mockSvc := &mockWebsitesService{
 		getGatewayWebsiteFunc: func(ctx context.Context, domain string) (*ipfs.GatewayWebsiteResponse, error) {
