@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"time"
 
 	ipfs "go.lumeweb.com/ipfs-sdk"
@@ -23,32 +22,27 @@ type sdkClient struct {
 }
 
 func NewClient(baseURL, secret string, timeout time.Duration) (APIClient, error) {
-	client, err := ipfs.NewClient(baseURL, "", ipfs.WithGatewaySecret(secret))
+	client, err := ipfs.NewClient(baseURL, "", ipfs.WithGatewaySecret(secret), ipfs.WithTimeout(timeout))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ipfs-sdk client: %w", err)
 	}
-
-	client.SetHTTPClient(&http.Client{
-		Timeout: timeout,
-	})
 
 	// Dedicated health-check client. The shared client pools keep-alive
 	// connections, which can silently go stale on the TLS edge (Caddy on-demand
 	// certs / idle timeouts) and hang the health check until its timeout. The
 	// gateway's own /healthz must not be held hostage by a dead pooled
 	// connection, so the ping path opens a fresh connection per check, matching
-	// a direct curl to /internal/ping. Clone the default transport so standard
-	// behavior (proxy from environment, dial/TLS timeouts, HTTP/2) is preserved.
-	pingClient, err := ipfs.NewClient(baseURL, "", ipfs.WithGatewaySecret(secret))
+	// a direct curl to /internal/ping. WithKeepAlive(false) gives a fresh
+	// connection per request while preserving the SDK's hardened transport,
+	// so no hand-constructed transport / SetHTTPClient is needed.
+	pingClient, err := ipfs.NewClient(baseURL, "",
+		ipfs.WithGatewaySecret(secret),
+		ipfs.WithTimeout(timeout),
+		ipfs.WithKeepAlive(false),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ipfs-sdk ping client: %w", err)
 	}
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.DisableKeepAlives = true
-	pingClient.SetHTTPClient(&http.Client{
-		Timeout:   timeout,
-		Transport: t,
-	})
 
 	return &sdkClient{
 		websites: client.Websites(),
