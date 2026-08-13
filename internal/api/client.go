@@ -22,14 +22,42 @@ type sdkClient struct {
 	ping     ipfs.PingService
 }
 
+const (
+	// idleConnTimeout mirrors the ipfs-sdk default. It bounds how long an idle
+	// pooled connection is kept alive so stale keep-alive connections to the
+	// portal edge (which Caddy on-demand TLS can silently close) are reaped and
+	// re-dialed instead of being reused and hanging the request.
+	idleConnTimeout = 90 * time.Second
+)
+
+// hardenedTransport returns a clone of http.DefaultTransport with a finite idle
+// connection lifetime and a bounded idle pool. Unlike http.DefaultTransport
+// (whose idle connections linger forever), this reaps connections that go stale
+// after server restarts or edge idle timeouts, preventing pooled-connection
+// hangs in the shared client. Standard behavior (proxy from environment,
+// dial/TLS timeouts, HTTP/2) is preserved.
+func hardenedTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.IdleConnTimeout = idleConnTimeout
+	t.MaxIdleConns = 100
+	t.MaxIdleConnsPerHost = 10
+	return t
+}
+
 func NewClient(baseURL, secret string, timeout time.Duration) (APIClient, error) {
 	client, err := ipfs.NewClient(baseURL, "", ipfs.WithGatewaySecret(secret))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ipfs-sdk client: %w", err)
 	}
 
+	// Apply the configured timeout while preserving a hardened transport. A
+	// bare &http.Client{Timeout: t} would drop the SDK's hardened default and
+	// fall back to http.DefaultTransport's unbounded idle pool, which is what
+	// allowed stale keep-alive connections to hang GetWebsite requests in
+	// production.
 	client.SetHTTPClient(&http.Client{
-		Timeout: timeout,
+		Timeout:   timeout,
+		Transport: hardenedTransport(),
 	})
 
 	// Dedicated health-check client. The shared client pools keep-alive
@@ -43,11 +71,11 @@ func NewClient(baseURL, secret string, timeout time.Duration) (APIClient, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create ipfs-sdk ping client: %w", err)
 	}
-	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.DisableKeepAlives = true
+	pt := http.DefaultTransport.(*http.Transport).Clone()
+	pt.DisableKeepAlives = true
 	pingClient.SetHTTPClient(&http.Client{
 		Timeout:   timeout,
-		Transport: t,
+		Transport: pt,
 	})
 
 	return &sdkClient{

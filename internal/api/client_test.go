@@ -204,6 +204,29 @@ func TestSDKClient_TypePassthrough(t *testing.T) {
 	}
 }
 
+// TestHardenedTransportGuardsAgainstStaleConnections guards the shared-client
+// transport hardening. The GetWebsite path must not reuse a stale pooled
+// keep-alive connection forever: a finite IdleConnTimeout and a bounded idle
+// pool ensure connections that go stale on the portal edge (Caddy on-demand TLS
+// idle / server restart) are reaped and re-dialed, rather than hanging the
+// request for the full client timeout.
+func TestHardenedTransportGuardsAgainstStaleConnections(t *testing.T) {
+	tr := hardenedTransport()
+
+	if tr.IdleConnTimeout == 0 {
+		t.Error("hardened transport must set a finite IdleConnTimeout so stale pooled connections are reaped")
+	}
+	if tr.IdleConnTimeout > 5*time.Minute {
+		t.Errorf("IdleConnTimeout too long (%v) to guard against stale connections", tr.IdleConnTimeout)
+	}
+	if tr.MaxIdleConnsPerHost == 0 {
+		t.Error("hardened transport must bound MaxIdleConnsPerHost")
+	}
+	if tr.DisableKeepAlives {
+		t.Error("shared hardened transport must NOT disable keep-alives (that would prevent connection reuse on a hot path); stale reaping handles it")
+	}
+}
+
 // TestNewClient_PingUsesFreshConnections guards the health-check hardening:
 // the ping path must not reuse stale keep-alive connections (a pooled TLS
 // connection to the edge can silently die and hang /healthz until its
