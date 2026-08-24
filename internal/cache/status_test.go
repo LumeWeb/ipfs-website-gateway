@@ -356,3 +356,61 @@ func TestNewStatusCache_InvalidTTL(t *testing.T) {
 		}
 	})
 }
+
+func TestStatusCache_SetFromAPI_ShortTTLForTransientStates(t *testing.T) {
+	ttl := 5 * time.Minute
+	shortTTL := 30 * time.Second
+	cache, err := NewStatusCacheSimple(10, ttl, shortTTL)
+	if err != nil {
+		t.Fatalf("NewStatusCache returned error: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		status  string
+		wantTTL time.Duration
+	}{
+		{"active uses full ttl", types.StatusActive, ttl},
+		{"pending uses short ttl", types.StatusPendingValidation, shortTTL},
+		{"broken uses short ttl", types.StatusBroken, shortTTL},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			domain := "example.com"
+			cache.SetFromAPI(domain, &types.GatewayWebsiteResponse{
+				Domain: domain,
+				Status: tc.status,
+			})
+
+			result := cache.Get(domain)
+			if !result.Hit || result.Entry == nil || result.Entry.Response == nil {
+				t.Fatalf("expected cached entry for %s", tc.status)
+			}
+
+			got := result.Entry.ExpiresAt.Sub(result.Entry.CachedAt)
+			if got != tc.wantTTL {
+				t.Errorf("expected TTL %v, got %v", tc.wantTTL, got)
+			}
+		})
+	}
+}
+
+func TestStatusCache_SetFromAPI_NilWebsiteUsesFullTTL(t *testing.T) {
+	ttl := 5 * time.Minute
+	shortTTL := 30 * time.Second
+	cache, err := NewStatusCacheSimple(10, ttl, shortTTL)
+	if err != nil {
+		t.Fatalf("NewStatusCache returned error: %v", err)
+	}
+
+	cache.SetFromAPI("example.com", nil)
+	result := cache.Get("example.com")
+	if !result.Hit || result.Entry == nil {
+		t.Fatal("expected cached entry for nil website")
+	}
+	got := result.Entry.ExpiresAt.Sub(result.Entry.CachedAt)
+	if got != ttl {
+		t.Errorf("expected full TTL %v for nil website, got %v", ttl, got)
+	}
+}

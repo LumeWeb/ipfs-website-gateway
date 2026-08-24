@@ -280,7 +280,7 @@ func (s *Server) allowedHandler(c *echo.Context) (err error) {
 			return c.NoContent(http.StatusBadRequest)
 		}
 
-		if website.Status != types.StatusActive {
+		if !types.Classify(website).IsServiceable() {
 			s.logger.Debug("Website is not active",
 				zap.String("domain", domain),
 				zap.String("status", string(website.Status)),
