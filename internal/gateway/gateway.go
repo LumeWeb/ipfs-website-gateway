@@ -253,13 +253,7 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 	}
 
 	if g.statusCache != nil {
-		if website != nil && website.Status == types.StatusPendingValidation {
-			g.statusCache.SetShortTTL(domain, website)
-		} else if website != nil && website.Status == types.StatusBroken {
-			g.statusCache.SetShortTTL(domain, website)
-		} else {
-			g.statusCache.Set(domain, website)
-		}
+		g.statusCache.SetFromAPI(domain, website)
 	}
 
 	accessCheckDuration.WithLabelValues(LabelResultAPISuccess).Observe(time.Since(start).Seconds())
@@ -393,32 +387,31 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 			return
 		}
 
-		if website.Status == types.StatusBroken {
+		switch types.Classify(website) {
+		case types.StateBroken:
 			m.logger.Debug("domain broken", zap.String("domain", domain))
 			m.renderInvalidPage(w, http.StatusGone, domain, "Website Unavailable",
 				"This website has been marked as broken or removed from the Pinner network.",
 				"The content may be inaccessible, the target hash may be invalid, or the website may have been taken down by the owner.")
 			return
-		}
-
-		if website.Status == types.StatusPendingValidation {
+		case types.StatePending:
 			m.logger.Debug("domain pending validation",
 				zap.String("domain", domain),
 				zap.String("status", string(website.Status)),
 			)
 			m.renderPendingPage(w, domain)
 			return
-		}
-
-		if website.Status != types.StatusActive {
-			m.logger.Debug("domain not active",
-				zap.String("domain", domain),
-				zap.String("status", string(website.Status)),
-			)
-			m.renderInvalidPage(w, http.StatusNotFound, domain, "Website Inactive",
-				"This website is currently inactive.",
-				"The website may be awaiting validation, suspended, or temporarily disabled.")
-			return
+		default:
+			if !types.Classify(website).IsServiceable() {
+				m.logger.Debug("domain not active",
+					zap.String("domain", domain),
+					zap.String("status", string(website.Status)),
+				)
+				m.renderInvalidPage(w, http.StatusNotFound, domain, "Website Inactive",
+					"This website is currently inactive.",
+					"The website may be awaiting validation, suspended, or temporarily disabled.")
+				return
+			}
 		}
 
 		originalPath := r.URL.Path

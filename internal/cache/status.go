@@ -148,6 +148,18 @@ func (sc *StatusCache) SetShortTTL(domain string, response *types.GatewayWebsite
 	sc.persistToRedis(domain, entry)
 }
 
+// SetFromAPI stores a website response, choosing the short or full TTL based
+// on the centralized SiteState. Pending/broken (transient) states use the
+// short TTL so they revalidate sooner; all other states use the full TTL.
+// This is the single place that encodes the TTL decision for API responses.
+func (sc *StatusCache) SetFromAPI(domain string, website *types.GatewayWebsiteResponse) {
+	if website != nil && types.Classify(website).NeedsShortTTL() {
+		sc.SetShortTTL(domain, website)
+		return
+	}
+	sc.Set(domain, website)
+}
+
 func (sc *StatusCache) SetInvalid(domain string) {
 	sc.Set(domain, nil)
 }
@@ -178,7 +190,7 @@ func (sc *StatusCache) IsDomainActive(domain string) bool {
 	result := sc.Get(domain)
 	return result.Hit && !result.Expired && result.Entry != nil &&
 		result.Entry.Err == nil && result.Entry.Response != nil &&
-		result.Entry.Response.Status == types.StatusActive
+		types.Classify(result.Entry.Response).IsActive()
 }
 
 func (sc *StatusCache) Close() {
@@ -208,11 +220,7 @@ func (sc *StatusCache) revalidate(domain string) {
 			return
 		}
 
-		if website.Status == types.StatusPendingValidation || website.Status == types.StatusBroken {
-			sc.SetShortTTL(domain, website)
-		} else {
-			sc.Set(domain, website)
-		}
+		sc.SetFromAPI(domain, website)
 	})
 }
 
