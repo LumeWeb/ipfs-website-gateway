@@ -102,14 +102,16 @@ func (c SSEConfig) Schema() zog.ZogSchema {
 // BrokenWatchConfig holds configuration for the broken-site recovery watcher
 // that polls sites marked broken while the SSE stream is disconnected.
 type BrokenWatchConfig struct {
-	Enabled  bool          `config:"enabled"`
-	Interval time.Duration `config:"interval"`
+	Enabled             bool          `config:"enabled"`
+	Interval            time.Duration `config:"interval"`
+	DeletedConfirmCount int           `config:"deleted_confirm_count"`
 }
 
 func (c BrokenWatchConfig) Defaults() map[string]any {
 	return map[string]any{
-		"Enabled":  true,
-		"Interval": 30 * time.Second,
+		"Enabled":             true,
+		"Interval":            30 * time.Second,
+		"DeletedConfirmCount": 3,
 	}
 }
 
@@ -119,6 +121,7 @@ func (c BrokenWatchConfig) Schema() zog.ZogSchema {
 		"Interval": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
 			return *valPtr > 0
 		}, zog.Message("broken_watch interval must be greater than 0")),
+		"DeletedConfirmCount": zog.Int().Optional(),
 	})
 }
 

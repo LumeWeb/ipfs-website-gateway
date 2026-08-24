@@ -315,6 +315,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 				statusCache,
 				sseClient,
 				cfg.API.SSE.BrokenWatch.Interval,
+				cfg.API.SSE.BrokenWatch.DeletedConfirmCount,
 				func(domain, targetHash string) {
 					if prewarmer == nil {
 						return

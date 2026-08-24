@@ -31,12 +31,14 @@ func (f *fakeAPI) setActive(domain string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.perSite[domain] = &types.GatewayWebsiteResponse{Status: types.StatusActive}
+	delete(f.perError, domain)
 }
 
 func (f *fakeAPI) setBroken(domain string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.perSite[domain] = &types.GatewayWebsiteResponse{Status: types.StatusBroken}
+	delete(f.perError, domain)
 }
 
 func (f *fakeAPI) setError(domain string, err error) {
@@ -87,7 +89,7 @@ type fakeConn struct {
 func (c *fakeConn) IsConnected() bool { return c.connected.Load() }
 
 func newTestWatcher(api *fakeAPI, cache *fakeCache, conn *fakeConn, onRecover RecoverHandler) *BrokenWatcher {
-	return NewBrokenWatcher(api, cache, conn, time.Hour, onRecover, nil)
+	return NewBrokenWatcher(api, cache, conn, time.Hour, 3, onRecover, nil)
 }
 
 func contains(ss []string, target string) bool {
@@ -178,37 +180,110 @@ func TestPollIgnoresAPIError(t *testing.T) {
 	}
 }
 
-func TestPollDropsDeletedSite(t *testing.T) {
-	// A 404 (site deleted) must drop the domain from the watch set so it is
-	// not polled forever. A 410 (broken) site must remain polled.
+func TestPollDoesNotDropOnSingle404(t *testing.T) {
+	// A single 404 can be transient (content not yet pinned/replicated), so
+	// the site must stay in the watch set until the 404 is confirmed.
 	api := newFakeAPI()
-	deletedErr := ipfs.ErrNotFound
-	brokenErr := ipfs.ErrGone
-	api.setError("gone.example.com", deletedErr)
-	api.setError("broken.example.com", brokenErr)
+	api.setError("gone.example.com", ipfs.ErrNotFound)
 	cache := &fakeCache{}
 	conn := &fakeConn{}
 	conn.connected.Store(false)
 
-	w := newTestWatcher(api, cache, conn, nil)
+	w := newTestWatcher(api, cache, conn, nil) // deletedConfirmCount = 3
 	w.MarkBroken("gone.example.com")
-	w.MarkBroken("broken.example.com")
 
 	w.poll()
 
+	w.mu.Lock()
+	_, stillTracked := w.broken["gone.example.com"]
+	count := w.notFound["gone.example.com"]
+	w.mu.Unlock()
+
+	if !stillTracked {
+		t.Fatal("expected site to remain in the watch set after a single 404")
+	}
+	if count != 1 {
+		t.Fatalf("expected notFound counter of 1, got %d", count)
+	}
+}
+
+func TestPollDropsAfterConfirmed404s(t *testing.T) {
+	api := newFakeAPI()
+	api.setError("gone.example.com", ipfs.ErrNotFound)
+	api.setError("broken.example.com", ipfs.ErrGone)
+	cache := &fakeCache{}
+	conn := &fakeConn{}
+	conn.connected.Store(false)
+
+	w := newTestWatcher(api, cache, conn, nil) // deletedConfirmCount = 3
+	w.MarkBroken("gone.example.com")
+	w.MarkBroken("broken.example.com")
+
+	// Two 404s: not yet confirmed.
+	w.poll()
+	w.poll()
+	w.mu.Lock()
+	_, stillTracked := w.broken["gone.example.com"]
+	w.mu.Unlock()
+	if !stillTracked {
+		t.Fatal("expected site to remain after two 404s (below threshold)")
+	}
+
+	// Third 404 confirms deletion.
+	w.poll()
 	w.mu.Lock()
 	_, stillGone := w.broken["gone.example.com"]
 	_, stillBroken := w.broken["broken.example.com"]
 	w.mu.Unlock()
 
 	if stillGone {
-		t.Fatal("expected deleted (404) site to be removed from the watch set")
+		t.Fatal("expected deleted (404) site to be dropped after confirmation")
 	}
 	if !stillBroken {
 		t.Fatal("expected broken (410) site to remain in the watch set")
 	}
 	if len(cache.invalidatedDomains()) != 0 {
 		t.Fatalf("did not expect cache invalidation for deleted site, got %v", cache.invalidatedDomains())
+	}
+}
+
+func TestPollResetsNotFoundStreakOnSuccess(t *testing.T) {
+	// A successful (site exists, still broken) response between 404s resets
+	// the confirmation streak so the site is not dropped prematurely.
+	api := newFakeAPI()
+	api.setError("gone.example.com", ipfs.ErrNotFound)
+	cache := &fakeCache{}
+	conn := &fakeConn{}
+	conn.connected.Store(false)
+
+	w := newTestWatcher(api, cache, conn, nil) // deletedConfirmCount = 3
+	w.MarkBroken("gone.example.com")
+
+	w.poll()                          // 404 #1
+	w.poll()                          // 404 #2
+	api.setBroken("gone.example.com") // now exists, just broken
+	w.poll()                          // success resets the streak
+
+	w.mu.Lock()
+	count := w.notFound["gone.example.com"]
+	_, stillTracked := w.broken["gone.example.com"]
+	w.mu.Unlock()
+
+	if count != 0 {
+		t.Fatalf("expected notFound streak to reset on success, got %d", count)
+	}
+	if !stillTracked {
+		t.Fatal("expected site to remain in the watch set (still broken)")
+	}
+
+	// Deleted again: must start over from 0.
+	api.setError("gone.example.com", ipfs.ErrNotFound)
+	w.poll() // 404 #1 after reset
+	w.mu.Lock()
+	count = w.notFound["gone.example.com"]
+	w.mu.Unlock()
+	if count != 1 {
+		t.Fatalf("expected notFound streak to restart at 1, got %d", count)
 	}
 }
 
@@ -245,7 +320,7 @@ func TestLoopRecoversAfterReconnect(t *testing.T) {
 
 	var recovered atomic.Int64
 	// Very short interval to exercise the real polling loop.
-	w := NewBrokenWatcher(api, cache, conn, 10*time.Millisecond, func(domain, targetHash string) {
+	w := NewBrokenWatcher(api, cache, conn, 10*time.Millisecond, 3, func(domain, targetHash string) {
 		recovered.Add(1)
 	}, nil)
 	w.MarkBroken("example.com")
@@ -295,14 +370,17 @@ func TestMarkBrokenIgnoresEmpty(t *testing.T) {
 	}
 }
 
-func TestNewBrokenWatcherDefaultsInterval(t *testing.T) {
+func TestNewBrokenWatcherDefaults(t *testing.T) {
 	api := newFakeAPI()
 	cache := &fakeCache{}
 	conn := &fakeConn{}
 
-	w := NewBrokenWatcher(api, cache, conn, 0, nil, nil)
+	w := NewBrokenWatcher(api, cache, conn, 0, 0, nil, nil)
 	if w.interval != 30*time.Second {
 		t.Fatalf("expected default interval of 30s, got %v", w.interval)
+	}
+	if w.deletedConfirmCount != 3 {
+		t.Fatalf("expected default deletedConfirmCount of 3, got %d", w.deletedConfirmCount)
 	}
 	if w.api != api {
 		t.Fatal("expected api client to be stored")
