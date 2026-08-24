@@ -18,17 +18,17 @@ import (
 	"github.com/ipfs/boxo/namesys"
 	"github.com/ipfs/boxo/path"
 	cid "github.com/ipfs/go-cid"
-	"github.com/libp2p/go-libp2p/core/routing"
 	routinghelpers "github.com/libp2p/go-libp2p-routing-helpers"
+	"github.com/libp2p/go-libp2p/core/routing"
+	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
-	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/internal/metrics"
 	stalenamesys "go.lumeweb.com/ipfs-website-gateway/internal/namesys"
 	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
 	"go.lumeweb.com/ipfs-website-gateway/internal/prewarm"
-	"go.opentelemetry.io/otel/attribute"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 )
 
@@ -53,6 +53,12 @@ type ErrorPageData struct {
 	ContentTemplate string
 }
 
+// BrokenSiteWatcher is notified of sites served as broken so recovery can be
+// tracked while the SSE stream is disconnected.
+type BrokenSiteWatcher interface {
+	MarkBroken(domain string)
+}
+
 type Gateway struct {
 	backend       *gateway.BlocksBackend
 	handler       http.Handler
@@ -62,6 +68,7 @@ type Gateway struct {
 	nameSys       *stalenamesys.StaleWhileRevalidateNameSystem
 	prewarmer     *prewarm.Prewarmer
 	gatewayDomain string
+	brokenWatcher BrokenSiteWatcher
 }
 
 func NewGateway(bs blockservice.BlockService, apiClient api.APIClient, statusCache *cache.StatusCache, logger *zap.Logger, retrievalTimeout time.Duration, valueStore routing.ValueStore, ipnsCacheSize int, ipnsFreshTTL time.Duration, redisClient *cache.RedisClient, pubsubEnabled bool, gatewayDomain string) (*Gateway, error) {
@@ -152,6 +159,19 @@ func (g *Gateway) SetPrewarmCallback(fn stalenamesys.PrewarmCallback) {
 
 func (g *Gateway) SetPrewarmer(p *prewarm.Prewarmer) {
 	g.prewarmer = p
+}
+
+// SetBrokenSiteWatcher registers a watcher that is notified of sites served as
+// broken so it can poll for recovery while SSE is disconnected.
+func (g *Gateway) SetBrokenSiteWatcher(w BrokenSiteWatcher) {
+	g.brokenWatcher = w
+}
+
+// markBroken reports a site served as broken to the recovery watcher, if set.
+func (g *Gateway) markBroken(domain string) {
+	if g.brokenWatcher != nil {
+		g.brokenWatcher.MarkBroken(domain)
+	}
 }
 
 func (g *Gateway) Prewarmer() *prewarm.Prewarmer {
@@ -276,9 +296,9 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type AccessControlMiddleware struct {
-	gateway       *Gateway
-	logger        *zap.Logger
-	templates     *template.Template
+	gateway   *Gateway
+	logger    *zap.Logger
+	templates *template.Template
 }
 
 func NewAccessControlMiddleware(gw *Gateway, logger *zap.Logger) (*AccessControlMiddleware, error) {
@@ -352,6 +372,7 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 					zap.String("domain", domain),
 					zap.Error(err),
 				)
+				m.gateway.markBroken(domain)
 				m.renderInvalidPage(w, http.StatusGone, domain, "Website Unavailable",
 					"This website has been marked as broken or removed from the Pinner network.",
 					"The content may be inaccessible, the target hash may be invalid, or the website may have been taken down by the owner.")
@@ -390,6 +411,7 @@ func (m *AccessControlMiddleware) Wrap(next http.Handler) http.Handler {
 		switch types.Classify(website) {
 		case types.StateBroken:
 			m.logger.Debug("domain broken", zap.String("domain", domain))
+			m.gateway.markBroken(domain)
 			m.renderInvalidPage(w, http.StatusGone, domain, "Website Unavailable",
 				"This website has been marked as broken or removed from the Pinner network.",
 				"The content may be inaccessible, the target hash may be invalid, or the website may have been taken down by the owner.")

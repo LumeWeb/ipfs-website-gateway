@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
@@ -29,15 +30,17 @@ import (
 	"go.lumeweb.com/ipfs-website-gateway/internal/otel"
 	"go.lumeweb.com/ipfs-website-gateway/internal/prewarm"
 	"go.lumeweb.com/ipfs-website-gateway/internal/server"
+	"go.lumeweb.com/ipfs-website-gateway/internal/sitewatch"
 )
 
 var (
-	cfg        *config.Config
-	logger     *zap.Logger
-	node       *ipfs.Node
-	srv        *server.Server
-	prewarmer  *prewarm.Prewarmer
-	sseClient  *event.PortalEventClient
+	cfg         *config.Config
+	logger      *zap.Logger
+	node        *ipfs.Node
+	srv         *server.Server
+	prewarmer   *prewarm.Prewarmer
+	sseClient   *event.PortalEventClient
+	siteWatcher *sitewatch.BrokenWatcher
 )
 
 type DNSValidatorAdapter struct{}
@@ -302,6 +305,52 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		logger.Info("SSE event client started",
 			zap.String("url", sseURL),
 		)
+
+		// While SSE is disconnected, re-poll sites served as broken so a
+		// missed site_published event during the reconnect gap is not
+		// permanently lost. On recovery the cache is invalidated and the
+		// site is re-prewarmed.
+		if cfg.API.SSE.BrokenWatch.Enabled {
+			siteWatcher = sitewatch.NewBrokenWatcher(
+				apiClient,
+				statusCache,
+				sseClient,
+				cfg.API.SSE.BrokenWatch.Interval,
+				func(domain string) {
+					if prewarmer == nil {
+						return
+					}
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer cancel()
+
+					website, err := apiClient.GetWebsite(ctx, domain)
+					if err != nil {
+						logger.Warn("broken site recovery: failed to fetch website for prewarm",
+							zap.String("domain", domain),
+							zap.Error(err))
+						return
+					}
+					if website == nil {
+						return
+					}
+
+					rootCID, err := cid.Decode(website.TargetHash)
+					if err != nil {
+						logger.Warn("broken site recovery: failed to decode CID for prewarm",
+							zap.String("domain", domain),
+							zap.Error(err))
+						return
+					}
+					prewarmer.Submit(rootCID)
+				},
+				logger,
+			)
+			gateway.SetBrokenSiteWatcher(siteWatcher)
+			siteWatcher.Start()
+			logger.Info("SSE broken-site watcher started",
+				zap.Duration("interval", cfg.API.SSE.BrokenWatch.Interval),
+			)
+		}
 	}
 
 	healthChecker := health.NewChecker(health.CheckerOptions{
@@ -344,6 +393,10 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 
 	if sseClient != nil {
 		sseClient.Stop()
+	}
+
+	if siteWatcher != nil {
+		siteWatcher.Stop()
 	}
 
 	if prewarmer != nil {
