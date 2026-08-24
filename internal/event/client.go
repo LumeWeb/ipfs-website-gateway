@@ -10,12 +10,12 @@ package event
 
 import (
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
 
 	sse "github.com/apt304/sse-go/server"
+	"go.uber.org/zap"
 )
 
 // ErrClientClosed is returned by Connect() when the client has already
@@ -54,6 +54,8 @@ type Client struct {
 	done      chan struct{}
 	closeOnce sync.Once
 	wg        sync.WaitGroup
+
+	logger *zap.Logger
 
 	state   ConnectionState
 	stateMu sync.RWMutex
@@ -106,6 +108,25 @@ func (c *Client) SetHeader(key, value string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.headers[key] = value
+}
+
+// SetLogger sets the zap logger used for reconnection diagnostics. It must be
+// called before Connect(). If never set, reconnection logs are dropped.
+func (c *Client) SetLogger(logger *zap.Logger) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.logger = logger
+}
+
+// log returns the configured logger, defaulting to a no-op logger when none
+// was set so callers never need to nil-check.
+func (c *Client) log() *zap.Logger {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.logger == nil {
+		return zap.NewNop()
+	}
+	return c.logger
 }
 
 // addJitter adds +/- 2% jitter to the backoff duration
@@ -260,18 +281,26 @@ func (c *Client) handleDisconnection() {
 			return
 		case <-time.After(addJitter(backoff)):
 			retryCount++
-			slog.Info("attempting to reconnect", "url", c.url, "backoff", backoff, "jitteredBackoff", addJitter(backoff), "attempt", retryCount)
+			c.log().Info("attempting to reconnect",
+				zap.String("url", c.url),
+				zap.Duration("backoff", backoff),
+				zap.Duration("jitteredBackoff", addJitter(backoff)),
+				zap.Int("attempt", retryCount))
 
 			if err := c.Connect(); err != nil {
 				if err == ErrClientClosed {
 					// Client was disconnected via Disconnect() — stop reconnecting
 					return
 				}
-				slog.Warn("reconnection failed", "error", err, "backoff", backoff, "attempt", retryCount)
+				c.log().Warn("reconnection failed",
+					zap.Error(err),
+					zap.Duration("backoff", backoff),
+					zap.Int("attempt", retryCount))
 
 				// Check if we've exceeded max retries
 				if c.options.MaxRetries > 0 && retryCount >= c.options.MaxRetries {
-					slog.Error("max reconnection attempts exceeded", "maxRetries", c.options.MaxRetries)
+					c.log().Error("max reconnection attempts exceeded",
+						zap.Int("maxRetries", c.options.MaxRetries))
 					c.setState(StateDisconnected)
 
 					// Call error handler if set
@@ -289,7 +318,8 @@ func (c *Client) handleDisconnection() {
 				continue
 			}
 
-			slog.Info("reconnection successful", "attempts", retryCount)
+			c.log().Info("reconnection successful",
+				zap.Int("attempts", retryCount))
 			// Reset reconnection state after a successful session
 			retryCount = 0
 			backoff = c.options.Backoff
