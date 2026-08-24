@@ -31,7 +31,9 @@ type ConnState interface {
 }
 
 // RecoverHandler is invoked when a watched broken site reports active again.
-type RecoverHandler func(domain string)
+// It receives the site's target hash so callers can act on it (e.g. prewarm)
+// without re-fetching from the API.
+type RecoverHandler func(domain, targetHash string)
 
 // BrokenWatcher tracks sites served as broken while SSE is disconnected and
 // polls them via the portal API. A site is dropped from the watch set once it
@@ -49,9 +51,10 @@ type BrokenWatcher struct {
 	mu     sync.Mutex
 	broken map[string]struct{}
 
-	done     chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	done      chan struct{}
+	stopOnce  sync.Once
+	loopWG    sync.WaitGroup
+	recoverWG sync.WaitGroup
 }
 
 // NewBrokenWatcher creates a recovery watcher. The watcher is not started
@@ -93,23 +96,25 @@ func (w *BrokenWatcher) MarkBroken(domain string) {
 
 // Start launches the polling loop. It stops after Stop is called.
 func (w *BrokenWatcher) Start() {
-	w.wg.Add(1)
+	w.loopWG.Add(1)
 	go w.loop()
 }
 
-// Stop terminates the polling loop and waits for it to finish.
+// Stop terminates the polling loop and waits for it and any in-flight recover
+// callbacks to finish.
 func (w *BrokenWatcher) Stop() {
 	w.stopOnce.Do(func() {
 		close(w.done)
 	})
-	w.wg.Wait()
+	w.loopWG.Wait()    // loop finished, no further recover() calls can be made
+	w.recoverWG.Wait() // drain in-flight recover callbacks
 }
 
 // loop ticks on the configured interval. While SSE is connected the watch set
 // is cleared (no gap, events are delivered directly). While disconnected it
 // polls each tracked broken domain for recovery.
 func (w *BrokenWatcher) loop() {
-	defer w.wg.Done()
+	defer w.loopWG.Done()
 
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()
@@ -176,14 +181,15 @@ func (w *BrokenWatcher) poll() {
 		}
 
 		if website != nil && types.Classify(website).IsActive() {
-			w.recover(domain)
+			w.recover(domain, website.TargetHash)
 		}
 	}
 }
 
 // recover removes a domain from the watch set, invalidates its cached status,
-// and fires the recover callback.
-func (w *BrokenWatcher) recover(domain string) {
+// and fires the recover callback off the polling loop so a slow callback does
+// not stall polling of the remaining tracked sites.
+func (w *BrokenWatcher) recover(domain, targetHash string) {
 	w.mu.Lock()
 	delete(w.broken, domain)
 	w.mu.Unlock()
@@ -191,8 +197,13 @@ func (w *BrokenWatcher) recover(domain string) {
 	if w.cache != nil {
 		w.cache.Invalidate(domain)
 	}
+
 	if w.onRecover != nil {
-		w.onRecover(domain)
+		w.recoverWG.Add(1)
+		go func() {
+			defer w.recoverWG.Done()
+			w.onRecover(domain, targetHash)
+		}()
 	}
 
 	w.logger.Info("broken site recovered, invalidated cache",

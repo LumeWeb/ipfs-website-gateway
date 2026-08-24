@@ -106,12 +106,13 @@ func TestPollRecoversActiveSite(t *testing.T) {
 	conn.connected.Store(false)
 
 	var recovered []string
-	w := newTestWatcher(api, cache, conn, func(domain string) {
+	w := newTestWatcher(api, cache, conn, func(domain, targetHash string) {
 		recovered = append(recovered, domain)
 	})
 	w.MarkBroken("example.com")
 
 	w.poll()
+	w.recoverWG.Wait() // recover callback runs asynchronously
 
 	if !contains(cache.invalidatedDomains(), "example.com") {
 		t.Fatalf("expected cache to be invalidated for example.com, got %v", cache.invalidatedDomains())
@@ -209,7 +210,7 @@ func TestLoopRecoversAfterReconnect(t *testing.T) {
 
 	var recovered atomic.Int64
 	// Very short interval to exercise the real polling loop.
-	w := NewBrokenWatcher(api, cache, conn, 10*time.Millisecond, func(domain string) {
+	w := NewBrokenWatcher(api, cache, conn, 10*time.Millisecond, func(domain, targetHash string) {
 		recovered.Add(1)
 	}, nil)
 	w.MarkBroken("example.com")

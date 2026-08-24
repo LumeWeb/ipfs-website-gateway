@@ -8,7 +8,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/urfave/cli/v3"
 	"go.uber.org/zap"
@@ -316,28 +315,15 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 				statusCache,
 				sseClient,
 				cfg.API.SSE.BrokenWatch.Interval,
-				func(domain string) {
+				func(domain, targetHash string) {
 					if prewarmer == nil {
 						return
 					}
-					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-					defer cancel()
-
-					website, err := apiClient.GetWebsite(ctx, domain)
-					if err != nil {
-						logger.Warn("broken site recovery: failed to fetch website for prewarm",
-							zap.String("domain", domain),
-							zap.Error(err))
-						return
-					}
-					if website == nil {
-						return
-					}
-
-					rootCID, err := cid.Decode(website.TargetHash)
+					rootCID, err := cid.Decode(targetHash)
 					if err != nil {
 						logger.Warn("broken site recovery: failed to decode CID for prewarm",
 							zap.String("domain", domain),
+							zap.String("target_hash", targetHash),
 							zap.Error(err))
 						return
 					}
