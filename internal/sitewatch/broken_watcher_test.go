@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 )
 
@@ -174,6 +175,40 @@ func TestPollIgnoresAPIError(t *testing.T) {
 	w.mu.Unlock()
 	if !stillTracked {
 		t.Fatal("expected site to remain in the watch set on transient API error")
+	}
+}
+
+func TestPollDropsDeletedSite(t *testing.T) {
+	// A 404 (site deleted) must drop the domain from the watch set so it is
+	// not polled forever. A 410 (broken) site must remain polled.
+	api := newFakeAPI()
+	deletedErr := ipfs.ErrNotFound
+	brokenErr := ipfs.ErrGone
+	api.setError("gone.example.com", deletedErr)
+	api.setError("broken.example.com", brokenErr)
+	cache := &fakeCache{}
+	conn := &fakeConn{}
+	conn.connected.Store(false)
+
+	w := newTestWatcher(api, cache, conn, nil)
+	w.MarkBroken("gone.example.com")
+	w.MarkBroken("broken.example.com")
+
+	w.poll()
+
+	w.mu.Lock()
+	_, stillGone := w.broken["gone.example.com"]
+	_, stillBroken := w.broken["broken.example.com"]
+	w.mu.Unlock()
+
+	if stillGone {
+		t.Fatal("expected deleted (404) site to be removed from the watch set")
+	}
+	if !stillBroken {
+		t.Fatal("expected broken (410) site to remain in the watch set")
+	}
+	if len(cache.invalidatedDomains()) != 0 {
+		t.Fatalf("did not expect cache invalidation for deleted site, got %v", cache.invalidatedDomains())
 	}
 }
 

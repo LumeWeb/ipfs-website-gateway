@@ -7,9 +7,11 @@ package sitewatch
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
+	ipfs "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/pkg/types"
 	"go.uber.org/zap"
 )
@@ -171,9 +173,18 @@ func (w *BrokenWatcher) poll() {
 		website, err := w.api.GetWebsite(ctx, domain)
 		cancel()
 
-		// A request-time error (transient, auth, etc.) leaves the site in the
-		// watch set to be retried on the next interval.
+		// A deleted site (404) is permanently gone, so it is dropped from the
+		// watch set instead of being polled forever. Broken/gone (410) and
+		// transient errors stay in the set to be retried on the next interval.
 		if err != nil {
+			if errors.Is(err, ipfs.ErrNotFound) {
+				w.mu.Lock()
+				delete(w.broken, domain)
+				w.mu.Unlock()
+				w.logger.Info("site deleted, dropped from broken watch set",
+					zap.String("domain", domain))
+				continue
+			}
 			w.logger.Debug("broken site poll failed, will retry",
 				zap.String("domain", domain),
 				zap.Error(err))
