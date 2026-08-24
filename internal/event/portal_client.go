@@ -85,6 +85,7 @@ func NewPortalEventClient(url, secret string, cfg ReconnectConfig, handler Porta
 	}
 
 	client := NewClient(url, []string{"gateway"}, options)
+	client.SetLogger(log)
 	client.SetHeader("X-Gateway-Secret", secret)
 
 	portalClient := &PortalEventClient{
