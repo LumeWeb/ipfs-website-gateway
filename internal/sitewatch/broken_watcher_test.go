@@ -247,6 +247,48 @@ func TestPollDropsAfterConfirmed404s(t *testing.T) {
 	}
 }
 
+func TestReconfirmDeletedNeedsFullCount(t *testing.T) {
+	// After a site is dropped for confirmed 404, it is re-marked broken on the
+	// next broken request. A single stale 404 must not immediately drop it
+	// again; the full confirmation count is required fresh each time.
+	api := newFakeAPI()
+	api.setError("gone.example.com", ipfs.ErrNotFound)
+	cache := &fakeCache{}
+	conn := &fakeConn{}
+	conn.connected.Store(false)
+
+	w := newTestWatcher(api, cache, conn, nil) // deletedConfirmCount = 3
+	w.MarkBroken("gone.example.com")
+
+	w.poll() // 404 #1
+	w.poll() // 404 #2
+	w.poll() // 404 #3 -> confirmed, dropped
+
+	w.mu.Lock()
+	_, dropped := w.broken["gone.example.com"]
+	w.mu.Unlock()
+	if dropped {
+		t.Fatal("expected site to be dropped after confirmed 404s")
+	}
+
+	// Re-marked (as the gateway would on the next broken request) and hit with
+	// a single 404: the stale counter must not be reused.
+	w.MarkBroken("gone.example.com")
+	w.poll() // 404 #1 (fresh streak)
+
+	w.mu.Lock()
+	count := w.notFound["gone.example.com"]
+	_, stillTracked := w.broken["gone.example.com"]
+	w.mu.Unlock()
+
+	if count != 1 {
+		t.Fatalf("expected fresh notFound streak of 1 after re-mark, got %d", count)
+	}
+	if !stillTracked {
+		t.Fatal("expected re-marked site to remain tracked after a single 404")
+	}
+}
+
 func TestPollResetsNotFoundStreakOnSuccess(t *testing.T) {
 	// A successful (site exists, still broken) response between 404s resets
 	// the confirmation streak so the site is not dropped prematurely.

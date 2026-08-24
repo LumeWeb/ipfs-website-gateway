@@ -199,6 +199,10 @@ func (w *BrokenWatcher) poll() {
 				if w.confirmNotFound(domain) {
 					w.mu.Lock()
 					delete(w.broken, domain)
+					// Reset the streak so a re-marked domain (MarkBroken is
+					// re-invoked on each broken request) must earn the full
+					// confirmation count again rather than one stale 404.
+					delete(w.notFound, domain)
 					w.mu.Unlock()
 					w.logger.Info("site deleted, dropped from broken watch set",
 						zap.String("domain", domain))
