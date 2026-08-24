@@ -69,30 +69,59 @@ type APIConfig struct {
 
 // SSEConfig holds configuration for the portal SSE event client.
 type SSEConfig struct {
-	Enabled    bool          `config:"enabled"`
-	Reconnect  bool          `config:"reconnect"`
-	Backoff    time.Duration `config:"backoff"`
-	MaxBackoff time.Duration `config:"max_backoff"`
-	MaxRetries int           `config:"max_retries"`
+	Enabled     bool              `config:"enabled"`
+	Reconnect   bool              `config:"reconnect"`
+	Backoff     time.Duration     `config:"backoff"`
+	MaxBackoff  time.Duration     `config:"max_backoff"`
+	MaxRetries  int               `config:"max_retries"`
+	BrokenWatch BrokenWatchConfig `config:"broken_watch"`
 }
 
 func (c SSEConfig) Defaults() map[string]any {
 	return map[string]any{
-		"Enabled":    true,
-		"Reconnect":  true,
-		"Backoff":    1 * time.Second,
-		"MaxBackoff": 30 * time.Second,
-		"MaxRetries": 0, // 0 = unlimited
+		"Enabled":     true,
+		"Reconnect":   true,
+		"Backoff":     1 * time.Second,
+		"MaxBackoff":  30 * time.Second,
+		"MaxRetries":  0, // 0 = unlimited
+		"BrokenWatch": c.BrokenWatch.Defaults(),
 	}
 }
 
 func (c SSEConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
-		"Enabled":    zog.Bool().Optional(),
-		"Reconnect":  zog.Bool().Optional(),
-		"Backoff":    zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
-		"MaxBackoff": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
-		"MaxRetries": zog.Int().Optional(),
+		"Enabled":     zog.Bool().Optional(),
+		"Reconnect":   zog.Bool().Optional(),
+		"Backoff":     zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"MaxBackoff":  zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool { return *valPtr > 0 }),
+		"MaxRetries":  zog.Int().Optional(),
+		"BrokenWatch": c.BrokenWatch.Schema(),
+	})
+}
+
+// BrokenWatchConfig holds configuration for the broken-site recovery watcher
+// that polls sites marked broken while the SSE stream is disconnected.
+type BrokenWatchConfig struct {
+	Enabled             bool          `config:"enabled"`
+	Interval            time.Duration `config:"interval"`
+	DeletedConfirmCount int           `config:"deleted_confirm_count"`
+}
+
+func (c BrokenWatchConfig) Defaults() map[string]any {
+	return map[string]any{
+		"Enabled":             true,
+		"Interval":            30 * time.Second,
+		"DeletedConfirmCount": 3,
+	}
+}
+
+func (c BrokenWatchConfig) Schema() zog.ZogSchema {
+	return zog.Struct(zog.Shape{
+		"Enabled": zog.Bool().Optional(),
+		"Interval": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
+			return *valPtr > 0
+		}, zog.Message("broken_watch interval must be greater than 0")),
+		"DeletedConfirmCount": zog.Int().Optional(),
 	})
 }
 
@@ -199,8 +228,8 @@ func (c APIConfig) Defaults() map[string]any {
 // Schema implements the ConfigSchemaProvider interface for Zog validation.
 func (c APIConfig) Schema() zog.ZogSchema {
 	return zog.Struct(zog.Shape{
-		"URL":     zog.String().Optional(),
-		"Secret":  zog.String().Optional(),
+		"URL":    zog.String().Optional(),
+		"Secret": zog.String().Optional(),
 		"Timeout": zog.CustomFunc(func(valPtr *time.Duration, ctx zog.Ctx) bool {
 			return *valPtr > 0
 		}, zog.Message("timeout must be greater than 0")),
