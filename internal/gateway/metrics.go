@@ -14,6 +14,7 @@ const (
 	LabelResultCacheMiss   = "cache_miss"
 	LabelResultAPISuccess  = "api_success"
 	LabelResultError       = "error"
+	LabelResultDegraded    = "degraded_stale"
 )
 
 var (

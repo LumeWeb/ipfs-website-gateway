@@ -1084,6 +1084,104 @@ func TestCheckAccess_ErrUnauthorizedPastStaleWindow(t *testing.T) {
 	}
 }
 
+func TestCheckAccess_ServesCachedCopyPastStaleWhenPortalDown(t *testing.T) {
+	callCount := 0
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &types.GatewayWebsiteResponse{
+					Domain:     "example.com",
+					Status:     types.StatusActive,
+					TargetHash: "QmTest",
+					TargetType: "ipfs",
+				}, nil
+			}
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+
+	staleTTL := 50 * time.Millisecond
+	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond, staleTTL, nil)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err != nil || website == nil || website.Status != types.StatusActive {
+		t.Fatalf("first CheckAccess should return active, got website=%v err=%v", website, err)
+	}
+
+	// Past the stale window the cache is a miss and the portal is unreachable.
+	time.Sleep(100 * time.Millisecond)
+
+	website, err = gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("should serve degraded cached copy when portal down, got err=%v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("degraded serving should return the last cached active website")
+	}
+
+	// The cached entry must still hold the good response, not the error.
+	res := statusCache.Get("example.com")
+	if res.Entry == nil || res.Entry.Response == nil || res.Entry.Response.Status != types.StatusActive {
+		t.Fatal("cached entry must retain the last known-good response (not be overwritten with the error)")
+	}
+	if res.Entry.Err != nil {
+		t.Fatalf("cached entry must not hold a validation error, got %v", res.Entry.Err)
+	}
+}
+
+func TestCheckAccess_ServesCachedCopyOnDeadlineExceeded(t *testing.T) {
+	callCount := 0
+	apiClient := &mockAPIClient{
+		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {
+			callCount++
+			if callCount == 1 {
+				return &types.GatewayWebsiteResponse{
+					Domain:     "example.com",
+					Status:     types.StatusActive,
+					TargetHash: "QmTest",
+					TargetType: "ipfs",
+				}, nil
+			}
+			return nil, context.DeadlineExceeded
+		},
+	}
+
+	staleTTL := 50 * time.Millisecond
+	statusCache, err := cache.NewStatusCache(100, 10*time.Millisecond, 10*time.Millisecond, staleTTL, nil)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	gw, err := newTestGateway(apiClient, statusCache)
+	if err != nil {
+		t.Fatalf("newTestGateway: %v", err)
+	}
+
+	website, err := gw.CheckAccess(context.Background(), "example.com")
+	if err != nil || website == nil || website.Status != types.StatusActive {
+		t.Fatalf("first CheckAccess should return active, got website=%v err=%v", website, err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	website, err = gw.CheckAccess(context.Background(), "example.com")
+	if err != nil {
+		t.Fatalf("should serve degraded cached copy on deadline exceeded, got err=%v", err)
+	}
+	if website == nil || website.Status != types.StatusActive {
+		t.Fatal("degraded serving on deadline exceeded should return the last cached active website")
+	}
+}
+
 func TestCheckAccess_NoStaleDataOnFreshMissWithError(t *testing.T) {
 	apiClient := &mockAPIClient{
 		getWebsiteFunc: func(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error) {

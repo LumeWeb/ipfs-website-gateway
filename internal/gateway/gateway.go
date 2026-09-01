@@ -240,7 +240,6 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 
 	website, err := g.api.GetWebsite(ctx, domain)
 	if err != nil {
-		accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 		g.logger.Debug("website status check failed",
 			zap.String("domain", domain),
 			zap.Error(err),
@@ -249,21 +248,43 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 			if g.statusCache != nil {
 				g.statusCache.SetError(domain, err)
 			}
+			accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 			return nil, err
 		}
 		if errors.Is(err, ipfs.ErrGone) {
 			if g.statusCache != nil {
 				g.statusCache.SetErrorShortTTL(domain, err)
 			}
+			accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 			return nil, err
 		}
 		if errors.Is(err, ipfs.ErrUnauthorized) {
 			if g.statusCache != nil {
 				g.statusCache.SetErrorShortTTL(domain, err)
 			}
+			accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 			return nil, err
 		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.Canceled) {
+			// Request canceled by the client; nothing to serve.
+			accessCheckTotal.WithLabelValues(LabelResultError).Inc()
+			return nil, err
+		}
+
+		// The portal could not be reached to validate (transport error, 5xx, or
+		// deadline exceeded). If we have a last-known-good cached response for
+		// this domain, keep serving it (uptime over validation) rather than
+		// failing closed and overwriting the cache with the error.
+		if deferred := g.degradedResponse(domain, err); deferred != nil {
+			accessCheckDuration.WithLabelValues(LabelResultDegraded).Observe(time.Since(start).Seconds())
+			accessCheckTotal.WithLabelValues(LabelResultDegraded).Inc()
+			return deferred, nil
+		}
+
+		accessCheckTotal.WithLabelValues(LabelResultError).Inc()
+		if errors.Is(err, context.DeadlineExceeded) {
+			// Never cache a deadline-exceeded result so the next request retries
+			// the portal once it recovers.
 			return nil, err
 		}
 		if g.statusCache != nil {
@@ -280,6 +301,28 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 	accessCheckTotal.WithLabelValues(LabelResultAPISuccess).Inc()
 
 	return website, nil
+}
+
+// degradedResponse attempts to fall back to the last known-good cached
+// response for a domain when the portal could not be reached to validate it.
+// It re-arms the cache entry (extending its expiry and scheduling a background
+// revalidation) without overwriting the cached response with the validation
+// error. It returns the cached response if it is serviceable, otherwise nil.
+func (g *Gateway) degradedResponse(domain string, err error) *types.GatewayWebsiteResponse {
+	if g.statusCache == nil {
+		return nil
+	}
+
+	cached := g.statusCache.KeepAlive(domain)
+	if cached == nil || cached.Response == nil || !types.Classify(cached.Response).IsServiceable() {
+		return nil
+	}
+
+	g.logger.Warn("portal unreachable, serving last cached version (degraded mode)",
+		zap.String("domain", domain),
+		zap.Error(err),
+	)
+	return cached.Response
 }
 
 func (g *Gateway) GetDNSLinkRecord(ctx context.Context, hostname string) (_ path.Path, err error) {
