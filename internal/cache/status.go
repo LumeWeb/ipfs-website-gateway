@@ -186,6 +186,43 @@ func (sc *StatusCache) SetErrorShortTTL(domain string, err error) {
 	sc.persistToRedis(domain, entry)
 }
 
+// KeepAlive returns the last cached entry for a domain — regardless of whether
+// it is fresh, stale, or past its stale window — and re-arms it so it keeps
+// being served while validation is temporarily impossible (e.g. the portal is
+// unreachable). It extends the entry's expiry to now+shortTTL, persists it back
+// to Redis, and triggers a background revalidation so the cache refreshes as
+// soon as the portal recovers.
+//
+// The returned entry's Response is never overwritten with the validation error;
+// the caller decides whether the cached response is still serviceable. It
+// returns nil if nothing is cached for the domain.
+func (sc *StatusCache) KeepAlive(domain string) *types.CacheEntry {
+	entry, ok := sc.cache.Get(domain)
+	if !ok && sc.redis != nil {
+		if redisEntry := sc.getFromRedis(domain); redisEntry != nil {
+			entry = redisEntry
+			ok = true
+		}
+	}
+	if !ok || entry == nil {
+		return nil
+	}
+
+	// Clone so concurrent readers never observe a mutated ExpiresAt.
+	now := time.Now()
+	rearmed := &types.CacheEntry{
+		Response:  entry.Response,
+		Err:       entry.Err,
+		CachedAt:  entry.CachedAt,
+		ExpiresAt: now.Add(sc.shortTTL),
+	}
+	sc.cache.Add(domain, rearmed)
+	sc.persistToRedis(domain, rearmed)
+	sc.revalidate(domain)
+
+	return rearmed
+}
+
 func (sc *StatusCache) IsDomainActive(domain string) bool {
 	result := sc.Get(domain)
 	return result.Hit && !result.Expired && result.Entry != nil &&

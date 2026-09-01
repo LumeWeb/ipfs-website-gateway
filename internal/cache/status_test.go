@@ -396,6 +396,58 @@ func TestStatusCache_SetFromAPI_ShortTTLForTransientStates(t *testing.T) {
 	}
 }
 
+func TestStatusCache_KeepAlive(t *testing.T) {
+	ttl := 5 * time.Millisecond
+	shortTTL := 200 * time.Millisecond
+	staleTTL := 10 * time.Millisecond
+	cache, err := NewStatusCache(10, ttl, shortTTL, staleTTL, nil)
+	if err != nil {
+		t.Fatalf("NewStatusCache: %v", err)
+	}
+
+	response := &types.GatewayWebsiteResponse{
+		Domain:     "example.com",
+		Status:     types.StatusActive,
+		TargetType: "ipfs",
+		TargetHash: "QmExample",
+	}
+	cache.Set("example.com", response)
+
+	// Let the entry age past its TTL and stale window.
+	time.Sleep(ttl + staleTTL + 20*time.Millisecond)
+
+	if got := cache.Get("example.com"); got.Hit {
+		t.Fatal("expected cache miss past the stale window")
+	}
+
+	kept := cache.KeepAlive("example.com")
+	if kept == nil {
+		t.Fatal("expected KeepAlive to return the cached entry")
+	}
+	if kept.Response == nil || kept.Response.Status != types.StatusActive {
+		t.Fatal("expected KeepAlive to retain the last known-good response")
+	}
+	if kept.Err != nil {
+		t.Fatalf("expected KeepAlive to retain nil error, got %v", kept.Err)
+	}
+
+	// The entry must be re-armed within the short TTL so it serves again.
+	if got := cache.Get("example.com"); !got.Hit || got.Expired {
+		t.Error("expected re-armed entry to be a fresh hit after KeepAlive")
+	}
+}
+
+func TestStatusCache_KeepAlive_Miss(t *testing.T) {
+	cache, err := NewStatusCacheSimple(10, 5*time.Minute, 30*time.Second)
+	if err != nil {
+		t.Fatalf("NewStatusCacheSimple: %v", err)
+	}
+
+	if got := cache.KeepAlive("missing.com"); got != nil {
+		t.Fatalf("expected nil for uncached domain, got %v", got)
+	}
+}
+
 func TestStatusCache_SetFromAPI_NilWebsiteUsesFullTTL(t *testing.T) {
 	ttl := 5 * time.Minute
 	shortTTL := 30 * time.Second
