@@ -240,7 +240,6 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 
 	website, err := g.api.GetWebsite(ctx, domain)
 	if err != nil {
-		accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 		g.logger.Debug("website status check failed",
 			zap.String("domain", domain),
 			zap.Error(err),
@@ -249,22 +248,26 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 			if g.statusCache != nil {
 				g.statusCache.SetError(domain, err)
 			}
+			accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 			return nil, err
 		}
 		if errors.Is(err, ipfs.ErrGone) {
 			if g.statusCache != nil {
 				g.statusCache.SetErrorShortTTL(domain, err)
 			}
+			accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 			return nil, err
 		}
 		if errors.Is(err, ipfs.ErrUnauthorized) {
 			if g.statusCache != nil {
 				g.statusCache.SetErrorShortTTL(domain, err)
 			}
+			accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 			return nil, err
 		}
 		if errors.Is(err, context.Canceled) {
 			// Request canceled by the client; nothing to serve.
+			accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 			return nil, err
 		}
 
@@ -278,6 +281,7 @@ func (g *Gateway) CheckAccess(ctx context.Context, domain string) (result *types
 			return deferred, nil
 		}
 
+		accessCheckTotal.WithLabelValues(LabelResultError).Inc()
 		if errors.Is(err, context.DeadlineExceeded) {
 			// Never cache a deadline-exceeded result so the next request retries
 			// the portal once it recovers.
