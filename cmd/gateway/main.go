@@ -282,6 +282,7 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 		// prewarmed.
 		cursorStore := cache.NewSSECursorStore(redisClient)
 		sseReconciler := sitewatch.NewReconciler(
+			ctx,
 			apiClient,
 			statusCache,
 			cursorStore,

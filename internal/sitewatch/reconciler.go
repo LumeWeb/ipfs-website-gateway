@@ -39,24 +39,38 @@ type CursorStore interface {
 // to the journal high-water mark, letting the BrokenWatcher defer clearing its
 // recovery state until then.
 type Reconciler struct {
+	ctx     context.Context
 	api     ReconcilerAPI
 	cache   ReconcilerCache
 	cursor  CursorStore
 	prewarm ReconcileHandler
-	logger  *zap.Logger
 
 	mu        sync.Mutex
 	connected bool
 	ready     bool
+	running   bool
+	pending   bool
+	// generation identifies the current connection session. A run captures the
+	// generation it was launched for and may only mark Ready if it is still the
+	// current session when it completes (a stale/overlapping run cannot clear
+	// the broken-site recovery state before the fresh reconcile finishes).
+	generation uint64
+	logger     *zap.Logger
 }
 
-// NewReconciler creates a reconciler. prewarm may be nil; published changes
-// still invalidate the cache.
-func NewReconciler(api ReconcilerAPI, cache ReconcilerCache, cursor CursorStore, prewarm ReconcileHandler, logger *zap.Logger) *Reconciler {
+// NewReconciler creates a reconciler bound to ctx, the application lifecycle
+// context. Reconciliation runs propagate ctx cancellation (e.g. shutdown) to
+// the cursor store and portal API. prewarm may be nil; published changes still
+// invalidate the cache.
+func NewReconciler(ctx context.Context, api ReconcilerAPI, cache ReconcilerCache, cursor CursorStore, prewarm ReconcileHandler, logger *zap.Logger) *Reconciler {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if logger == nil {
 		logger = zap.NewNop()
 	}
 	return &Reconciler{
+		ctx:     ctx,
 		api:     api,
 		cache:   cache,
 		cursor:  cursor,
@@ -67,7 +81,9 @@ func NewReconciler(api ReconcilerAPI, cache ReconcilerCache, cursor CursorStore,
 
 // OnConnect feeds connection-state transitions from the SSE client. A
 // disconnected→connected transition triggers a reconciliation run; repeat
-// connected reports while already connected are no-ops.
+// connected reports while already connected are no-ops. Only one run executes at
+// a time; a reconnect that arrives while a run is still draining is remembered
+// and reconciled once the in-flight run completes.
 func (r *Reconciler) OnConnect(connected bool) {
 	r.mu.Lock()
 	if !connected {
@@ -78,16 +94,28 @@ func (r *Reconciler) OnConnect(connected bool) {
 		r.mu.Unlock()
 		return
 	}
-	// Repeat connected reports (e.g. the telemetry poller) are no-ops; only the
-	// disconnected→connected transition reconciles. One run per connection.
 	if r.connected {
+		// Repeat connected report (e.g. the telemetry poller): no new session.
 		r.mu.Unlock()
 		return
 	}
+
+	// disconnected → connected transition: new connection session.
 	r.connected = true
+	r.ready = false
+	r.generation++
+
+	if r.running {
+		// A prior reconcile is still draining; run again once it finishes.
+		r.pending = true
+		r.mu.Unlock()
+		return
+	}
+	r.running = true
+	gen := r.generation
 	r.mu.Unlock()
 
-	go r.run()
+	go r.run(gen)
 }
 
 // Ready reports whether a reconciliation has completed up to the journal
@@ -99,8 +127,36 @@ func (r *Reconciler) Ready() bool {
 	return r.ready
 }
 
-func (r *Reconciler) run() {
-	ctx := context.Background()
+// run performs a reconciliation for the connection session captured by gen.
+// Only the run that is still the current session may mark Ready; a stale run
+// (superseded by a newer disconnect/reconnect) must not clear broken-site
+// recovery state early.
+func (r *Reconciler) run(gen uint64) {
+	err := r.reconcile()
+
+	r.mu.Lock()
+	// Only a run that is still the current (connected) session may report ready.
+	if err == nil && r.connected && r.generation == gen {
+		r.ready = true
+	}
+
+	if r.pending {
+		// A newer connection started while this run drained; reconcile it now.
+		r.pending = false
+		gen = r.generation
+		r.mu.Unlock()
+		go r.run(gen)
+		return
+	}
+
+	r.running = false
+	r.mu.Unlock()
+}
+
+// reconcile replays the durable change journal after the persisted cursor,
+// paging past truncation until the journal high-water mark is reached.
+func (r *Reconciler) reconcile() error {
+	ctx := r.ctx
 	after, err := r.cursor.Get(ctx)
 	if err != nil {
 		r.logger.Warn("failed to load SSE cursor, starting from retained window",
@@ -109,10 +165,15 @@ func (r *Reconciler) run() {
 
 	replayed := 0
 	for {
+		if err := ctx.Err(); err != nil {
+			r.logger.Debug("SSE reconciliation aborted", zap.Error(err))
+			return err
+		}
+
 		resp, err := r.api.ReconcileWebsiteChanges(ctx, strconv.Itoa(after))
 		if err != nil {
 			r.logger.Error("SSE reconciliation failed", zap.Error(err))
-			return
+			return err
 		}
 
 		for _, ev := range resp.Events {
@@ -138,9 +199,7 @@ func (r *Reconciler) run() {
 		)
 	}
 
-	r.mu.Lock()
-	r.ready = true
-	r.mu.Unlock()
+	return nil
 }
 
 // apply dispatches a single replayed change, mirroring the realtime SSE handler.

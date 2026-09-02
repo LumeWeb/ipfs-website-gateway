@@ -70,8 +70,8 @@ func waitReady(t *testing.T, r *Reconciler) {
 	t.Fatal("reconciler did not become ready in time")
 }
 
-func newTestReconciler(api *fakeReconcilerAPI, st *reconCache, prewarm ReconcileHandler) *Reconciler {
-	return NewReconciler(api, st, cache.NewSSECursorStore(nil), prewarm, zap.NewNop())
+func newTestReconciler(ctx context.Context, api *fakeReconcilerAPI, st *reconCache, prewarm ReconcileHandler) *Reconciler {
+	return NewReconciler(ctx, api, st, cache.NewSSECursorStore(nil), prewarm, zap.NewNop())
 }
 
 func TestReconciler_ReconcileOnConnect(t *testing.T) {
@@ -89,7 +89,7 @@ func TestReconciler_ReconcileOnConnect(t *testing.T) {
 	store := &reconCache{}
 	var prewarmed []string
 	var prewarmMu sync.Mutex
-	r := newTestReconciler(api, store, func(domain, cid string) {
+	r := newTestReconciler(context.Background(), api, store, func(domain, cid string) {
 		prewarmMu.Lock()
 		prewarmed = append(prewarmed, domain+":"+cid)
 		prewarmMu.Unlock()
@@ -119,7 +119,7 @@ func TestReconciler_NoReplayWhileConnected(t *testing.T) {
 		},
 	}
 	store := &reconCache{}
-	r := newTestReconciler(api, store, nil)
+	r := newTestReconciler(context.Background(), api, store, nil)
 
 	r.OnConnect(true)
 	waitReady(t, r)
@@ -140,7 +140,7 @@ func TestReconciler_ReconcileAgainAfterDisconnect(t *testing.T) {
 		},
 	}
 	store := &reconCache{}
-	r := newTestReconciler(api, store, nil)
+	r := newTestReconciler(context.Background(), api, store, nil)
 
 	r.OnConnect(true)
 	waitReady(t, r)
@@ -166,7 +166,7 @@ func TestReconciler_TruncatedPagination(t *testing.T) {
 		},
 	}
 	store := &reconCache{}
-	r := newTestReconciler(api, store, nil)
+	r := newTestReconciler(context.Background(), api, store, nil)
 
 	r.OnConnect(true)
 	waitReady(t, r)
@@ -182,7 +182,7 @@ func TestReconciler_TruncatedPagination(t *testing.T) {
 func TestReconciler_NotReadyOnFailure(t *testing.T) {
 	api := &fakeReconcilerAPI{err: context.DeadlineExceeded}
 	store := &reconCache{}
-	r := newTestReconciler(api, store, nil)
+	r := newTestReconciler(context.Background(), api, store, nil)
 
 	r.OnConnect(true)
 	time.Sleep(50 * time.Millisecond)
@@ -192,5 +192,100 @@ func TestReconciler_NotReadyOnFailure(t *testing.T) {
 	}
 	if got := store.domains(); len(got) != 0 {
 		t.Fatalf("invalidated = %v, want none on failure", got)
+	}
+}
+
+// gateAPI blocks the first two ReconcileWebsiteChanges calls on explicit release
+// channels so a test can hold a reconcile in-flight across a disconnect/reconnect.
+type gateAPI struct {
+	mu       sync.Mutex
+	calls    []string
+	started  chan struct{} // closed when the first call begins
+	release1 chan struct{}
+	release2 chan struct{}
+}
+
+func (g *gateAPI) ReconcileWebsiteChanges(_ context.Context, after string) (*sdk.WebsiteChangesResponse, error) {
+	g.mu.Lock()
+	g.calls = append(g.calls, after)
+	idx := len(g.calls)
+	g.mu.Unlock()
+
+	switch idx {
+	case 1:
+		close(g.started)
+		<-g.release1
+	case 2:
+		<-g.release2
+	}
+	return &sdk.WebsiteChangesResponse{HighWaterMark: idx}, nil
+}
+
+func (g *gateAPI) count() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.calls)
+}
+
+// TestReconciler_StaleRunCannotMarkReady verifies a disconnected→connected
+// transition while a reconcile is in flight does not let the stale (older
+// session) run report Ready before the fresh reconcile completes, and that
+// overlapping runs are serialized (no second run starts until the first drains).
+func TestReconciler_StaleRunCannotMarkReady(t *testing.T) {
+	api := &gateAPI{
+		started:  make(chan struct{}),
+		release1: make(chan struct{}),
+		release2: make(chan struct{}),
+	}
+	store := &reconCache{}
+	r := NewReconciler(context.Background(), api, store, cache.NewSSECursorStore(nil), nil, zap.NewNop())
+
+	// First connect: gen1 run starts and blocks on the portal call.
+	r.OnConnect(true)
+	<-api.started
+
+	// Disconnect and reconnect while gen1 is still in-flight: gen2 is pending,
+	// and must NOT run concurrently (only one reconcile at a time).
+	r.OnConnect(false)
+	r.OnConnect(true)
+	if got := api.count(); got != 1 {
+		t.Fatalf("expected no overlapping run while gen1 in-flight, got %d calls", got)
+	}
+
+	// Release gen1: the stale run completes but is no longer the current session,
+	// so it must not mark Ready; gen2 is then launched and blocks.
+	close(api.release1)
+	deadline := time.Now().Add(2 * time.Second)
+	for api.count() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("fresh reconcile was not launched after the stale run completed")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.Ready() {
+		t.Fatal("stale gen1 run marked Ready before the fresh gen2 reconcile completed")
+	}
+
+	// Release gen2: the fresh reconcile completes -> Ready.
+	close(api.release2)
+	waitReady(t, r)
+}
+
+func TestReconciler_AbortsOnContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancelled before reconciling
+
+	api := &fakeReconcilerAPI{}
+	store := &reconCache{}
+	r := NewReconciler(ctx, api, store, cache.NewSSECursorStore(nil), nil, zap.NewNop())
+
+	r.OnConnect(true)
+	time.Sleep(50 * time.Millisecond)
+
+	if r.Ready() {
+		t.Fatal("reconciler should not be ready when its context is cancelled")
+	}
+	if got := api.afters(); len(got) != 0 {
+		t.Fatalf("reconcile must not run with a cancelled context, got calls %v", got)
 	}
 }
