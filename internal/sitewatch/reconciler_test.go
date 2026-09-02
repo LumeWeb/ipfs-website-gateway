@@ -289,3 +289,90 @@ func TestReconciler_AbortsOnContextCancel(t *testing.T) {
 		t.Fatalf("reconcile must not run with a cancelled context, got calls %v", got)
 	}
 }
+
+// hangAPI records each call then blocks until its context is cancelled, never
+// returning a response — modelling a hung portal request.
+type hangAPI struct {
+	mu          sync.Mutex
+	calls       int
+	started     chan struct{}
+	startedOnce sync.Once
+}
+
+func (h *hangAPI) ReconcileWebsiteChanges(ctx context.Context, _ string) (*sdk.WebsiteChangesResponse, error) {
+	h.mu.Lock()
+	h.calls++
+	h.mu.Unlock()
+	h.startedOnce.Do(func() { close(h.started) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (h *hangAPI) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.calls
+}
+
+// TestReconciler_HungReconcileRecovers verifies a hung portal call is bounded by
+// the per-reconcile timeout: running clears and a later reconnect can launch a
+// fresh run instead of wedging the reconciler not-ready forever.
+func TestReconciler_HungReconcileRecovers(t *testing.T) {
+	api := &hangAPI{started: make(chan struct{})}
+	store := &reconCache{}
+	r := NewReconciler(context.Background(), api, store, cache.NewSSECursorStore(nil), nil, zap.NewNop())
+	r.reconcileTimeout = 20 * time.Millisecond
+
+	r.OnConnect(true)
+	<-api.started
+
+	// Let the hung call hit its timeout so running clears.
+	time.Sleep(60 * time.Millisecond)
+
+	// A fresh reconnect must launch a new run (not be skipped as "already running").
+	r.OnConnect(false)
+	r.OnConnect(true)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for api.count() < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("reconciler wedged: no fresh reconcile launched after the hung call timed out")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// stuckHWMAPI always reports Truncated=true with a high-water mark that never
+// advances, modelling a broken portal that keeps asking for another page.
+type stuckHWMAPI struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *stuckHWMAPI) ReconcileWebsiteChanges(_ context.Context, _ string) (*sdk.WebsiteChangesResponse, error) {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+	return &sdk.WebsiteChangesResponse{HighWaterMark: 0, Truncated: true}, nil
+}
+
+func (s *stuckHWMAPI) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// TestReconciler_NonAdvancingHighWaterMark verifies a non-advancing high-water
+// mark ends the journal replay instead of looping forever.
+func TestReconciler_NonAdvancingHighWaterMark(t *testing.T) {
+	api := &stuckHWMAPI{}
+	store := &reconCache{}
+	r := NewReconciler(context.Background(), api, store, cache.NewSSECursorStore(nil), nil, zap.NewNop())
+
+	r.OnConnect(true)
+	waitReady(t, r)
+
+	if got := api.count(); got != 1 {
+		t.Fatalf("non-advancing high-water mark looped; expected 1 API call, got %d", got)
+	}
+}

@@ -4,11 +4,16 @@ import (
 	"context"
 	"strconv"
 	"sync"
+	"time"
 
 	sdk "go.lumeweb.com/ipfs-sdk"
 	"go.lumeweb.com/ipfs-website-gateway/internal/event"
 	"go.uber.org/zap"
 )
+
+// reconcileTimeout bounds a single reconciliation run so a hung portal call
+// cannot hold run() open indefinitely and starve later reconnects.
+const reconcileTimeout = 30 * time.Second
 
 // ReconcilerAPI replays durable website lifecycle changes after a cursor.
 type ReconcilerAPI interface {
@@ -55,7 +60,11 @@ type Reconciler struct {
 	// current session when it completes (a stale/overlapping run cannot clear
 	// the broken-site recovery state before the fresh reconcile finishes).
 	generation uint64
-	logger     *zap.Logger
+
+	// reconcileTimeout bounds a single run; overridden in tests.
+	reconcileTimeout time.Duration
+
+	logger *zap.Logger
 }
 
 // NewReconciler creates a reconciler bound to ctx, the application lifecycle
@@ -70,12 +79,13 @@ func NewReconciler(ctx context.Context, api ReconcilerAPI, cache ReconcilerCache
 		logger = zap.NewNop()
 	}
 	return &Reconciler{
-		ctx:     ctx,
-		api:     api,
-		cache:   cache,
-		cursor:  cursor,
-		prewarm: prewarm,
-		logger:  logger.Named("sse-reconciler"),
+		ctx:              ctx,
+		api:              api,
+		cache:            cache,
+		cursor:           cursor,
+		prewarm:          prewarm,
+		logger:           logger.Named("sse-reconciler"),
+		reconcileTimeout: reconcileTimeout,
 	}
 }
 
@@ -132,7 +142,11 @@ func (r *Reconciler) Ready() bool {
 // (superseded by a newer disconnect/reconnect) must not clear broken-site
 // recovery state early.
 func (r *Reconciler) run(gen uint64) {
-	err := r.reconcile()
+	// Bound each reconcile so a hung portal call cannot hold run() (and thus the
+	// running flag) open indefinitely and starve a pending reconnect.
+	ctx, cancel := context.WithTimeout(r.ctx, r.reconcileTimeout)
+	defer cancel()
+	err := r.reconcile(ctx)
 
 	r.mu.Lock()
 	// Only a run that is still the current (connected) session may report ready.
@@ -155,8 +169,7 @@ func (r *Reconciler) run(gen uint64) {
 
 // reconcile replays the durable change journal after the persisted cursor,
 // paging past truncation until the journal high-water mark is reached.
-func (r *Reconciler) reconcile() error {
-	ctx := r.ctx
+func (r *Reconciler) reconcile(ctx context.Context) error {
 	after, err := r.cursor.Get(ctx)
 	if err != nil {
 		r.logger.Warn("failed to load SSE cursor, starting from retained window",
@@ -181,14 +194,18 @@ func (r *Reconciler) reconcile() error {
 			replayed++
 		}
 
-		after = resp.HighWaterMark
-		if err := r.cursor.Set(ctx, after); err != nil {
+		next := resp.HighWaterMark
+		if err := r.cursor.Set(ctx, next); err != nil {
 			r.logger.Warn("failed to persist SSE cursor", zap.Error(err))
 		}
 
-		if !resp.Truncated {
+		// Stop when the journal is fully drained or the high-water mark fails to
+		// advance (a stuck page would otherwise loop forever).
+		if !resp.Truncated || next <= after {
+			after = next
 			break
 		}
+		after = next
 	}
 
 	if replayed > 0 {
