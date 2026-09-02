@@ -425,3 +425,64 @@ func TestReconciler_SlowProgressiveJournalCompletes(t *testing.T) {
 		t.Fatal("reconciler should be ready after a progressive journal completes")
 	}
 }
+
+// endlessPageAPI always returns Truncated=true with an advancing high-water
+// mark, modelling a portal that keeps demanding another page forever.
+type endlessPageAPI struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (e *endlessPageAPI) ReconcileWebsiteChanges(_ context.Context, _ string) (*sdk.WebsiteChangesResponse, error) {
+	e.mu.Lock()
+	e.calls++
+	c := e.calls
+	e.mu.Unlock()
+	return &sdk.WebsiteChangesResponse{HighWaterMark: c, Truncated: true}, nil
+}
+
+func (e *endlessPageAPI) count() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
+}
+
+// TestReconciler_AlwaysAdvancingTruncatedStops verifies the page cap bounds a
+// portal that returns Truncated=true with an always-advancing high-water mark
+// (which the stuck-mark check cannot catch), and that running clears so a later
+// reconnect is not wedged.
+func TestReconciler_AlwaysAdvancingTruncatedStops(t *testing.T) {
+	api := &endlessPageAPI{}
+	store := &reconCache{}
+	r := NewReconciler(context.Background(), api, store, cache.NewSSECursorStore(nil), nil, zap.NewNop())
+	r.maxReconcilePages = 3
+
+	r.OnConnect(true)
+	deadline := time.Now().Add(2 * time.Second)
+	for api.count() < 3 {
+		if time.Now().After(deadline) {
+			t.Fatal("expected the page cap to bound the reconcile loop")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	// Let the run reach the cap and clear running.
+	time.Sleep(50 * time.Millisecond)
+
+	if got := api.count(); got != 3 {
+		t.Fatalf("always-advancing truncated portal not bounded by page cap; calls = %d, want 3", got)
+	}
+	if r.Ready() {
+		t.Fatal("reconciler must not report ready when the journal never drains")
+	}
+
+	// A subsequent reconnect launches a fresh run (not wedged).
+	r.OnConnect(false)
+	r.OnConnect(true)
+	deadline = time.Now().Add(2 * time.Second)
+	for api.count() < 6 {
+		if time.Now().After(deadline) {
+			t.Fatal("reconciler wedged after the page cap: no fresh run on reconnect")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

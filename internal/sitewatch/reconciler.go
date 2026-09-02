@@ -2,6 +2,7 @@ package sitewatch
 
 import (
 	"context"
+	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -12,9 +13,19 @@ import (
 )
 
 // requestTimeout bounds a single journal page request so a hung portal call
-// cannot hold run() open indefinitely and starve later reconnects, while still
-// letting a slow-but-progressing multi-page journal complete.
+// cannot hold a run open indefinitely, while still letting a slow-but-progressing
+// multi-page journal complete.
 const requestTimeout = 30 * time.Second
+
+// reconcileTimeout bounds the entire reconcile — cursor I/O, the event loop and
+// the total of all journal pages — so a hung Redis call or a portal that keeps
+// requesting another page cannot wedge the reconciler with running=true.
+const reconcileTimeout = 5 * time.Minute
+
+// maxReconcilePages caps the number of journal pages per reconcile as a
+// belt-and-suspenders guard against a portal that returns Truncated=true with an
+// always-advancing high-water mark (which a stuck-mark check cannot catch).
+const maxReconcilePages = 1000
 
 // ReconcilerAPI replays durable website lifecycle changes after a cursor.
 type ReconcilerAPI interface {
@@ -64,6 +75,10 @@ type Reconciler struct {
 
 	// requestTimeout bounds a single journal page request; overridden in tests.
 	requestTimeout time.Duration
+	// reconcileTimeout bounds the whole reconcile; overridden in tests.
+	reconcileTimeout time.Duration
+	// maxReconcilePages caps journal pages per reconcile; overridden in tests.
+	maxReconcilePages int
 
 	logger *zap.Logger
 }
@@ -80,13 +95,15 @@ func NewReconciler(ctx context.Context, api ReconcilerAPI, cache ReconcilerCache
 		logger = zap.NewNop()
 	}
 	return &Reconciler{
-		ctx:            ctx,
-		api:            api,
-		cache:          cache,
-		cursor:         cursor,
-		prewarm:        prewarm,
-		logger:         logger.Named("sse-reconciler"),
-		requestTimeout: requestTimeout,
+		ctx:               ctx,
+		api:               api,
+		cache:             cache,
+		cursor:            cursor,
+		prewarm:           prewarm,
+		logger:            logger.Named("sse-reconciler"),
+		requestTimeout:    requestTimeout,
+		reconcileTimeout:  reconcileTimeout,
+		maxReconcilePages: maxReconcilePages,
 	}
 }
 
@@ -143,7 +160,12 @@ func (r *Reconciler) Ready() bool {
 // (superseded by a newer disconnect/reconnect) must not clear broken-site
 // recovery state early.
 func (r *Reconciler) run(gen uint64) {
-	err := r.reconcile(r.ctx)
+	// Bound the whole reconcile so cursor I/O, the event loop and the total of
+	// all journal pages cannot hold running open on a hung Redis call or a
+	// runaway portal; each page request is additionally bounded below.
+	runCtx, cancel := context.WithTimeout(r.ctx, r.reconcileTimeout)
+	defer cancel()
+	err := r.reconcile(runCtx)
 
 	r.mu.Lock()
 	// Only a run that is still the current (connected) session may report ready.
@@ -174,9 +196,15 @@ func (r *Reconciler) reconcile(ctx context.Context) error {
 	}
 
 	replayed := 0
-	for {
+	for page := 1; ; page++ {
 		if err := ctx.Err(); err != nil {
 			r.logger.Debug("SSE reconciliation aborted", zap.Error(err))
+			return err
+		}
+
+		if page > r.maxReconcilePages {
+			err := fmt.Errorf("SSE reconciliation exceeded %d journal pages", r.maxReconcilePages)
+			r.logger.Error("SSE reconciliation aborted", zap.Error(err))
 			return err
 		}
 
