@@ -5,7 +5,6 @@ go 1.26.0
 require (
 	github.com/Oudwins/zog v0.22.0
 	github.com/alexliesenfeld/health v0.8.1
-	github.com/apt304/sse-go v0.0.3
 	github.com/avast/retry-go/v5 v5.0.0
 	github.com/decred/go-bip39 v0.0.0-20260116150921-614f19988adb
 	github.com/dnslink-std/go v0.6.0
@@ -39,7 +38,7 @@ require (
 	github.com/tj/go-headers v0.0.0-20210318114139-bca4b5702463
 	github.com/urfave/cli/v3 v3.0.0-alpha9
 	go.lumeweb.com/configmanager v0.3.24
-	go.lumeweb.com/ipfs-sdk v0.1.78
+	go.lumeweb.com/ipfs-sdk v0.1.91
 	go.opentelemetry.io/contrib/bridges/otelzap v0.19.0
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc v0.20.0
@@ -56,6 +55,7 @@ require (
 	github.com/Jorropo/jsync v1.0.1 // indirect
 	github.com/alecthomas/units v0.0.0-20240927000941-0f3dac36c52b // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
+	github.com/apt304/sse-go v0.0.3 // indirect
 	github.com/avast/retry-go/v4 v4.7.0 // indirect
 	github.com/bdragon300/tusgo v0.1.2 // indirect
 	github.com/benbjohnson/clock v1.3.5 // indirect

@@ -14,6 +14,7 @@ import (
 type APIClient interface {
 	GetWebsite(ctx context.Context, domain string) (*types.GatewayWebsiteResponse, error)
 	Ping(ctx context.Context) (*ipfs.PingResponse, error)
+	ReconcileWebsiteChanges(ctx context.Context, after string) (*ipfs.WebsiteChangesResponse, error)
 }
 
 type sdkClient struct {
@@ -72,4 +73,14 @@ func (c *sdkClient) Ping(ctx context.Context) (*ipfs.PingResponse, error) {
 		return nil, fmt.Errorf("ping service not configured")
 	}
 	return c.ping.Ping(ctx)
+}
+
+// ReconcileWebsiteChanges replays durable website lifecycle changes after the
+// supplied cursor. The gateway calls this after an SSE reconnect (or on
+// startup) to catch up on publish/removal events it missed while disconnected.
+func (c *sdkClient) ReconcileWebsiteChanges(ctx context.Context, after string) (*ipfs.WebsiteChangesResponse, error) {
+	if c.websites == nil {
+		return nil, fmt.Errorf("websites service not configured")
+	}
+	return c.websites.ReconcileWebsiteChanges(ctx, after)
 }

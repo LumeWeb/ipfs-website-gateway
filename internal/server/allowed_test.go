@@ -747,6 +747,10 @@ func (m *MockAPIClient) GetWebsite(ctx context.Context, domain string) (*types.G
 	return nil, nil
 }
 
+func (m *MockAPIClient) ReconcileWebsiteChanges(_ context.Context, _ string) (*ipfs.WebsiteChangesResponse, error) {
+	return nil, nil
+}
+
 func (m *MockAPIClient) Ping(_ context.Context) (*ipfs.PingResponse, error) {
 	return nil, fmt.Errorf("ping not implemented in test mock")
 }

@@ -18,7 +18,7 @@ type mockWebsitesService struct {
 	getGatewayWebsiteFunc func(ctx context.Context, domain string) (*ipfs.GatewayWebsiteResponse, error)
 }
 
-func (m *mockWebsitesService) List(ctx context.Context) ([]ipfs.WebsiteItem, error) {
+func (m *mockWebsitesService) List(ctx context.Context, opts ...ipfs.ListWebsitesOption) ([]ipfs.WebsiteItem, error) {
 	return nil, nil
 }
 
@@ -113,6 +113,22 @@ func (m *mockWebsitesService) GetDomainDNSRequirements(ctx context.Context, webs
 }
 
 func (m *mockWebsitesService) RepublishDANE(ctx context.Context, websiteID string, domainID string) (*ipfs.DomainDANERepublishResponse, error) {
+	return nil, nil
+}
+
+func (m *mockWebsitesService) ReconcileWebsiteChanges(ctx context.Context, after string) (*ipfs.WebsiteChangesResponse, error) {
+	return nil, nil
+}
+
+func (m *mockWebsitesService) ConvertDomainToOnChain(ctx context.Context, websiteID string, domainID string) (*ipfs.DomainResponse, error) {
+	return nil, nil
+}
+
+func (m *mockWebsitesService) ListPlatformDomains(ctx context.Context) (*ipfs.PlatformDomainListResponse, error) {
+	return nil, nil
+}
+
+func (m *mockWebsitesService) CheckPlatformDomainAvailability(ctx context.Context, label string) (*ipfs.PlatformAvailabilityResponse, error) {
 	return nil, nil
 }
 

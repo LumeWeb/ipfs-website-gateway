@@ -66,6 +66,11 @@ type BrokenWatcher struct {
 	stopOnce  sync.Once
 	loopWG    sync.WaitGroup
 	recoverWG sync.WaitGroup
+
+	// reconcileReady, when set, gates clearing the watch set on reconnection.
+	// Recovery state is kept until SSE reconciliation reaches the journal
+	// high-water mark so a reconnect cannot silently drop missed changes.
+	reconcileReady func() bool
 }
 
 // NewBrokenWatcher creates a recovery watcher. The watcher is not started
@@ -112,6 +117,13 @@ func (w *BrokenWatcher) MarkBroken(domain string) {
 	w.logger.Debug("tracking broken site for recovery polling", zap.String("domain", domain))
 }
 
+// SetReconciliationReady registers a predicate that must return true before the
+// watch set is cleared on reconnection. When unset (nil), the legacy behavior of
+// clearing as soon as SSE reports connected is preserved.
+func (w *BrokenWatcher) SetReconciliationReady(fn func() bool) {
+	w.reconcileReady = fn
+}
+
 // Start launches the polling loop. It stops after Stop is called.
 func (w *BrokenWatcher) Start() {
 	w.loopWG.Add(1)
@@ -143,7 +155,12 @@ func (w *BrokenWatcher) loop() {
 			return
 		case <-ticker.C:
 			if w.conn.IsConnected() {
-				w.clear()
+				// Hold recovery state until SSE reconciliation reaches the
+				// journal high-water mark so a reconnect cannot drop missed
+				// changes (see Reconciler).
+				if w.reconcileReady == nil || w.reconcileReady() {
+					w.clear()
+				}
 				continue
 			}
 			w.poll()

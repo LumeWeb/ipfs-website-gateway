@@ -22,6 +22,10 @@ var (
 		Name: "sse_connected",
 		Help: "1 if SSE client is connected to portal, 0 otherwise",
 	})
+	sseReplayEventsTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "sse_replay_events_total",
+		Help: "Total number of website changes replayed by the SSE reconciler",
+	})
 )
 
 func init() {
@@ -30,5 +34,11 @@ func init() {
 		sseParseErrorsTotal,
 		sseErrorsTotal,
 		sseConnected,
+		sseReplayEventsTotal,
 	)
+}
+
+// RecordReplayEvents records replayed website changes from the SSE reconciler.
+func RecordReplayEvents(n int) {
+	sseReplayEventsTotal.Add(float64(n))
 }
