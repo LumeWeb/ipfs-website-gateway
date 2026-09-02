@@ -321,7 +321,7 @@ func TestReconciler_HungReconcileRecovers(t *testing.T) {
 	api := &hangAPI{started: make(chan struct{})}
 	store := &reconCache{}
 	r := NewReconciler(context.Background(), api, store, cache.NewSSECursorStore(nil), nil, zap.NewNop())
-	r.reconcileTimeout = 20 * time.Millisecond
+	r.requestTimeout = 20 * time.Millisecond
 
 	r.OnConnect(true)
 	<-api.started
@@ -374,5 +374,54 @@ func TestReconciler_NonAdvancingHighWaterMark(t *testing.T) {
 
 	if got := api.count(); got != 1 {
 		t.Fatalf("non-advancing high-water mark looped; expected 1 API call, got %d", got)
+	}
+}
+
+// slowPageAPI returns pages after a per-page delay, advancing the high-water
+// mark each time and marking the last page non-truncated.
+type slowPageAPI struct {
+	mu    sync.Mutex
+	calls int
+	pages int
+	delay time.Duration
+}
+
+func (s *slowPageAPI) ReconcileWebsiteChanges(ctx context.Context, _ string) (*sdk.WebsiteChangesResponse, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(s.delay):
+	}
+	s.mu.Lock()
+	s.calls++
+	c := s.calls
+	s.mu.Unlock()
+	return &sdk.WebsiteChangesResponse{HighWaterMark: c, Truncated: c < s.pages}, nil
+}
+
+func (s *slowPageAPI) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// TestReconciler_SlowProgressiveJournalCompletes verifies the timeout bounds each
+// journal page request rather than the whole run, so a slow-but-progressing
+// multi-page journal still reaches the high-water mark and reports Ready.
+func TestReconciler_SlowProgressiveJournalCompletes(t *testing.T) {
+	api := &slowPageAPI{pages: 3, delay: 20 * time.Millisecond}
+	store := &reconCache{}
+	r := NewReconciler(context.Background(), api, store, cache.NewSSECursorStore(nil), nil, zap.NewNop())
+	// Per-page timeout of 40ms: each 20ms page succeeds, total 60ms > 40ms.
+	r.requestTimeout = 40 * time.Millisecond
+
+	r.OnConnect(true)
+	waitReady(t, r)
+
+	if got := api.count(); got != 3 {
+		t.Fatalf("expected all 3 journal pages to replay, got %d", got)
+	}
+	if !r.Ready() {
+		t.Fatal("reconciler should be ready after a progressive journal completes")
 	}
 }

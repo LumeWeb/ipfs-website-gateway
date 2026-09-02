@@ -11,9 +11,10 @@ import (
 	"go.uber.org/zap"
 )
 
-// reconcileTimeout bounds a single reconciliation run so a hung portal call
-// cannot hold run() open indefinitely and starve later reconnects.
-const reconcileTimeout = 30 * time.Second
+// requestTimeout bounds a single journal page request so a hung portal call
+// cannot hold run() open indefinitely and starve later reconnects, while still
+// letting a slow-but-progressing multi-page journal complete.
+const requestTimeout = 30 * time.Second
 
 // ReconcilerAPI replays durable website lifecycle changes after a cursor.
 type ReconcilerAPI interface {
@@ -61,8 +62,8 @@ type Reconciler struct {
 	// the broken-site recovery state before the fresh reconcile finishes).
 	generation uint64
 
-	// reconcileTimeout bounds a single run; overridden in tests.
-	reconcileTimeout time.Duration
+	// requestTimeout bounds a single journal page request; overridden in tests.
+	requestTimeout time.Duration
 
 	logger *zap.Logger
 }
@@ -79,13 +80,13 @@ func NewReconciler(ctx context.Context, api ReconcilerAPI, cache ReconcilerCache
 		logger = zap.NewNop()
 	}
 	return &Reconciler{
-		ctx:              ctx,
-		api:              api,
-		cache:            cache,
-		cursor:           cursor,
-		prewarm:          prewarm,
-		logger:           logger.Named("sse-reconciler"),
-		reconcileTimeout: reconcileTimeout,
+		ctx:            ctx,
+		api:            api,
+		cache:          cache,
+		cursor:         cursor,
+		prewarm:        prewarm,
+		logger:         logger.Named("sse-reconciler"),
+		requestTimeout: requestTimeout,
 	}
 }
 
@@ -142,11 +143,7 @@ func (r *Reconciler) Ready() bool {
 // (superseded by a newer disconnect/reconnect) must not clear broken-site
 // recovery state early.
 func (r *Reconciler) run(gen uint64) {
-	// Bound each reconcile so a hung portal call cannot hold run() (and thus the
-	// running flag) open indefinitely and starve a pending reconnect.
-	ctx, cancel := context.WithTimeout(r.ctx, r.reconcileTimeout)
-	defer cancel()
-	err := r.reconcile(ctx)
+	err := r.reconcile(r.ctx)
 
 	r.mu.Lock()
 	// Only a run that is still the current (connected) session may report ready.
@@ -183,7 +180,12 @@ func (r *Reconciler) reconcile(ctx context.Context) error {
 			return err
 		}
 
-		resp, err := r.api.ReconcileWebsiteChanges(ctx, strconv.Itoa(after))
+		// Bound each journal page request so a hung call cannot hold run() (and
+		// thus the running flag) open, without capping a slow-but-progressing
+		// multi-page journal mid-replay.
+		pageCtx, cancel := context.WithTimeout(ctx, r.requestTimeout)
+		resp, err := r.api.ReconcileWebsiteChanges(pageCtx, strconv.Itoa(after))
+		cancel()
 		if err != nil {
 			r.logger.Error("SSE reconciliation failed", zap.Error(err))
 			return err
