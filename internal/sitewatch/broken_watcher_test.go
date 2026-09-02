@@ -396,6 +396,49 @@ func TestLoopRecoversAfterReconnect(t *testing.T) {
 	}
 }
 
+func TestClearHeldUntilReconciliation(t *testing.T) {
+	api := newFakeAPI()
+	cache := &fakeCache{}
+	conn := &fakeConn{}
+	conn.connected.Store(false)
+
+	var reconcileReady atomic.Bool
+	reconcileReady.Store(false)
+
+	w := NewBrokenWatcher(api, cache, conn, 10*time.Millisecond, 3, nil, nil)
+	w.SetReconciliationReady(reconcileReady.Load)
+	w.MarkBroken("example.com")
+	w.Start()
+	defer w.Stop()
+
+	// Connected but reconciliation not yet complete: the watch set must be held.
+	conn.connected.Store(true)
+	time.Sleep(50 * time.Millisecond)
+
+	w.mu.Lock()
+	n := len(w.broken)
+	w.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("expected watch set held (1 entry) while reconciliation pending, got %d", n)
+	}
+
+	// Reconciliation completes: the next tick clears the set.
+	reconcileReady.Store(true)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		w.mu.Lock()
+		n = len(w.broken)
+		w.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if n != 0 {
+		t.Fatalf("expected watch set cleared after reconciliation, got %d entries", n)
+	}
+}
+
 func TestMarkBrokenIgnoresEmpty(t *testing.T) {
 	api := newFakeAPI()
 	cache := &fakeCache{}

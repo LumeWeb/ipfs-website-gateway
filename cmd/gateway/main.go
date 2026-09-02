@@ -17,6 +17,8 @@ import (
 	"github.com/ipfs/boxo/path"
 	cid "github.com/ipfs/go-cid"
 
+	sdk "go.lumeweb.com/ipfs-sdk"
+
 	"go.lumeweb.com/ipfs-website-gateway/internal/api"
 	"go.lumeweb.com/ipfs-website-gateway/internal/cache"
 	"go.lumeweb.com/ipfs-website-gateway/internal/config"
@@ -259,9 +261,36 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 
 	// SSE event client for proactive cache invalidation
 	if cfg.API.SSE.Enabled && cfg.API.URL != "" {
-		sseURL := strings.TrimSuffix(cfg.API.URL, "/") + "/internal/websites/events"
-		sseClient = event.NewPortalEventClient(
-			sseURL,
+		// Shared prewarm dispatch: decode a CID string and submit it to the
+		// prewarmer. Used by the realtime SSE handler and the reconciler.
+		submitPrewarm := func(cidStr string) {
+			if prewarmer == nil {
+				return
+			}
+			rootCID, err := cid.Decode(cidStr)
+			if err != nil {
+				logger.Warn("failed to decode CID for prewarm",
+					zap.String("cid", cidStr),
+					zap.Error(err))
+				return
+			}
+			prewarmer.Submit(rootCID)
+		}
+
+		// Reconcile the durable change journal on every SSE (re)connect so a
+		// deployment missed during a disconnect gap is still invalidated and
+		// prewarmed.
+		cursorStore := cache.NewSSECursorStore(redisClient)
+		sseReconciler := sitewatch.NewReconciler(
+			apiClient,
+			statusCache,
+			cursorStore,
+			func(domain, cid string) { submitPrewarm(cid) },
+			logger,
+		)
+
+		sseClient, err = event.NewPortalEventClient(
+			cfg.API.URL,
 			cfg.API.Secret,
 			event.ReconnectConfig{
 				Reconnect:  cfg.API.SSE.Reconnect,
@@ -269,27 +298,18 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 				MaxBackoff: cfg.API.SSE.MaxBackoff,
 				MaxRetries: cfg.API.SSE.MaxRetries,
 			},
-			func(ev event.WebsiteEvent) {
+			func(ev sdk.WebsiteEvent) {
 				switch ev.Type {
-				case event.EventTypePublished:
+				case sdk.WebsiteEventPublished:
 					if ev.Published != nil {
 						logger.Info("SSE: site published, invalidating cache + prewarming",
 							zap.String("domain", ev.Published.Domain),
 							zap.String("cid", ev.Published.CID),
 						)
 						statusCache.Invalidate(ev.Published.Domain)
-						if prewarmer != nil {
-							rootCID, err := cid.Decode(ev.Published.CID)
-							if err != nil {
-								logger.Error("SSE: invalid CID in published event",
-									zap.String("cid", ev.Published.CID),
-									zap.Error(err))
-								return
-							}
-							prewarmer.Submit(rootCID)
-						}
+						submitPrewarm(ev.Published.CID)
 					}
-				case event.EventTypeRemoved:
+				case sdk.WebsiteEventRemoved:
 					if ev.Removed != nil {
 						logger.Info("SSE: site removed, invalidating cache",
 							zap.String("domain", ev.Removed.Domain),
@@ -298,11 +318,16 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 					}
 				}
 			},
+			sseReconciler.OnConnect,
 			logger,
 		)
+		if err != nil {
+			logger.Error("failed to initialize SSE event client", zap.Error(err))
+			return fmt.Errorf("failed to initialize SSE event client: %w", err)
+		}
 		sseClient.Start()
 		logger.Info("SSE event client started",
-			zap.String("url", sseURL),
+			zap.String("url", strings.TrimSuffix(cfg.API.URL, "/")+"/internal/websites/events"),
 		)
 
 		// While SSE is disconnected, re-poll sites served as broken so a
@@ -316,22 +341,12 @@ func runGateway(ctx context.Context, cmd *cli.Command) error {
 				sseClient,
 				cfg.API.SSE.BrokenWatch.Interval,
 				cfg.API.SSE.BrokenWatch.DeletedConfirmCount,
-				func(domain, targetHash string) {
-					if prewarmer == nil {
-						return
-					}
-					rootCID, err := cid.Decode(targetHash)
-					if err != nil {
-						logger.Warn("broken site recovery: failed to decode CID for prewarm",
-							zap.String("domain", domain),
-							zap.String("target_hash", targetHash),
-							zap.Error(err))
-						return
-					}
-					prewarmer.Submit(rootCID)
-				},
+				func(_ string, targetHash string) { submitPrewarm(targetHash) },
 				logger,
 			)
+			// Hold broken-site recovery state until SSE reconciliation reaches
+			// the journal high-water mark (see Reconciler).
+			siteWatcher.SetReconciliationReady(sseReconciler.Ready)
 			gateway.SetBrokenSiteWatcher(siteWatcher)
 			siteWatcher.Start()
 			logger.Info("SSE broken-site watcher started",
